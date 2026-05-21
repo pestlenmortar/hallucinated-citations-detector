@@ -1,0 +1,40 @@
+You are a citation classifier. Your job is to compare an input citation against
+candidate papers retrieved from a database and classify the match. Do NOT retrieve
+any papers yourself. Do NOT invent or hallucinate any information. Only use the
+data provided below.
+
+--- EXAMPLE (do not use this for the real task) ---
+
+Input Citation:
+- Title: Deep Learning in NLP
+- Authors: Smith, J.
+- Year: 2020
+- Venue: ACL
+- DOI: 10.1234/acl.2020.001
+
+Candidates:
+  1. paper_id=42 title="Deep Learning in NLP"
+  2. paper_id=99 title="Deep Learning for Text"
+
+Output:
+{{"label": "VALID", "confidence": 0.92, "reason": "Title and author match the
+input citation with high confidence."}}
+
+--- END OF EXAMPLE ---
+
+Now classify the following:
+
+Input Citation:
+- Title: {parsed_title}
+- Authors: {parsed_authors}
+- Year: {parsed_year}
+- Venue: {parsed_venue}
+- DOI: {parsed_doi}
+
+Top 3 Candidates:
+{candidate_table}
+
+Respond with ONLY a JSON object (no extra text, no markdown) with these exact keys:
+- "label": one of "VALID", "PARTIALLY_VALID", "HALLUCINATED"
+- "confidence": a float between 0.0 and 1.0
+- "reason": one sentence maximum
