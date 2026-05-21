@@ -6,12 +6,20 @@ import sqlite3
 import time
 import urllib.parse
 import urllib.request
+import http.client
+import urllib.error
+
+
+INCOMPLETE_READ_SLEEP = 5
+MAX_429_RETRIES = 10
 
 
 BASE_URL = "https://api.openalex.org/works"
 PER_PAGE = 200
-DB_PATH = "papers.db"
-SLEEP_SECONDS = 0.1
+SLEEP_SECONDS = 1.0
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(_SCRIPT_DIR, "papers.db")
 
 
 def normalize_title(title):
@@ -50,34 +58,76 @@ def extract_venue(primary_location):
     return None
 
 
-def fetch_works(search_query, page=1):
+def fetch_works(search_query, cursor="*", max_retries=3, max_429_retries=MAX_429_RETRIES):
     params = urllib.parse.urlencode({
         "search": search_query,
-        "page": page,
         "per_page": PER_PAGE,
+        "cursor": cursor,
+        "mailto": "openalex-ingest@example.com",
     })
     url = f"{BASE_URL}?{params}"
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", "mailto:openalex-ingest@example.com")
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    for attempt in range(1, max_429_retries + 1):
+        try:
+            req = urllib.request.Request(url)
+            req.add_header("User-Agent", "mailto:openalex-ingest@example.com")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body)
+        except json.JSONDecodeError:
+            if attempt < max_retries:
+                wait = 5 * (2 ** (attempt - 1))
+                print(f"Invalid JSON response, retrying in {wait}s "
+                      f"(attempt {attempt}/{max_retries})...")
+                time.sleep(wait)
+                continue
+            raise
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait = min(5 * (2 ** (attempt - 1)), 120)
+                print(f"Rate limited, retrying in {wait}s (attempt {attempt}/{max_429_retries})...")
+                time.sleep(wait)
+                continue
+            if 500 <= e.code <= 599 and attempt < max_429_retries:
+                wait = 10 * (2 ** (attempt - 1))
+                print(f"Server error {e.code}, retrying in {wait}s "
+                      f"(attempt {attempt}/{max_429_retries})...")
+                time.sleep(wait)
+                continue
+            print(f"HTTP Error {e.code} for URL: {url}")
+            raise
+        except (http.client.IncompleteRead,
+                urllib.error.URLError,
+                ConnectionResetError,
+                TimeoutError) as e:
+            if attempt < max_retries:
+                wait = INCOMPLETE_READ_SLEEP * (2 ** (attempt - 1))
+                print(f"Connection error ({type(e).__name__}), retrying in {wait}s "
+                      f"(attempt {attempt}/{max_retries})...")
+                time.sleep(wait)
+                continue
+            print(f"Connection error ({type(e).__name__}): {e}")
+            raise
 
 
-def ingest_all(search_query):
+def ingest_all(search_query, max_records=None):
     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     with open(schema_path, "r") as f:
         conn.executescript(f.read())
 
-    page = 1
+    cursor = "*"
     inserted = 0
+    page = 0
 
     while True:
-        data = fetch_works(search_query, page)
+        data = fetch_works(search_query, cursor)
         results = data.get("results", [])
         if not results:
             break
+
+        page += 1
+        batch_inserted = 0
 
         for work in results:
             doi = work.get("doi")
@@ -86,8 +136,8 @@ def ingest_all(search_query):
 
             doi_clean = doi.split("https://doi.org/")[-1]
 
-            cursor = conn.execute("SELECT 1 FROM papers WHERE doi = ?", (doi_clean,))
-            if cursor.fetchone():
+            cur = conn.execute("SELECT 1 FROM papers WHERE doi = ?", (doi_clean,))
+            if cur.fetchone():
                 continue
 
             title = work.get("title")
@@ -104,17 +154,25 @@ def ingest_all(search_query):
                 (title, normalized_title, authors, year, venue, doi_clean, abstract),
             )
             inserted += 1
+            batch_inserted += 1
+
+            if max_records and inserted >= max_records:
+                break
 
         conn.commit()
 
-        meta = data.get("meta", {})
-        count = int(meta.get("count", 0))
-        total_pages = (count + PER_PAGE - 1) // PER_PAGE if count else 1
+        total = data.get("meta", {}).get("count", "?")
+        print(f"  Page {page}: {batch_inserted} inserted (total {inserted} so far, {total} available)")
 
-        if page >= total_pages:
+        if max_records and inserted >= max_records:
+            print(f"Reached target of {max_records} records.")
             break
 
-        page += 1
+        next_cursor = data.get("meta", {}).get("next_cursor")
+        if not next_cursor:
+            break
+
+        cursor = next_cursor
         time.sleep(SLEEP_SECONDS)
 
     conn.close()
@@ -124,5 +182,7 @@ def ingest_all(search_query):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest papers from OpenAlex API")
     parser.add_argument("query", help="Search query for the OpenAlex API")
+    parser.add_argument("--max-records", type=int, default=None,
+                        help="Maximum number of records to ingest (default: unlimited)")
     args = parser.parse_args()
-    ingest_all(args.query)
+    ingest_all(args.query, max_records=args.max_records)
