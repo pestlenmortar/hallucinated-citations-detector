@@ -11,6 +11,19 @@ Classification rules:
 - "HALLUCINATED" — no candidate matches the input citation by title, authors,
   or any combination of metadata fields.
 
+Author matching rules:
+- The ORDER of cited authors must match the order in the candidate (first to
+  last). If the citation lists authors in a different order than the real paper,
+  that is a mismatch.
+- If the candidate paper has MORE THAN 5 total authors, the citation does NOT
+  need to list all of them. It is sufficient if at least 50% of the total
+  authors are correctly cited AND they appear in the correct order.
+  Example: paper has 8 authors, citation lists 4 of them in the correct
+  order → authors are VALID.
+  Example: paper has 8 authors, citation lists 3 of them → 3/8 = 37.5% which
+  is below 50% → authors are PARTIALLY_VALID.
+- If the candidate has 5 or fewer authors, all authors should match.
+
 Venue location rules:
 - The venue NAME (conference/journal) is what matters, NOT the city or country
   where it was held.
@@ -26,36 +39,40 @@ In your "reason", report which specific fields do not match. For example:
 - If year is wrong: "year differs (cited 2018, actual 2017)"
 - If venue name is different: "venue differs (cited ICML, actual NeurIPS)"
 - If venue location is different: do NOT mention this
-- If authors don't match: "authors do not match"
+- If authors do not match: "authors do not match" or specify "only N of M authors
+  cited in correct order"
 - If DOI is wrong: "DOI mismatch"
 
 --- EXAMPLES ---
 
-Example 1 (VALID — same venue, different city):
+Example 1 (VALID — multi-author, ≥50% cited in correct order):
+  Input: title="Attention is all you need" authors="Vaswani, Shazeer, Parmar, Uszkoreit"
+         year=2017 venue="NeurIPS"
+  Candidate: title="Attention is All You Need" authors="Ashish Vaswani, Noam
+             Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez,
+             Lukasz Kaiser, Illia Polosukhin" year=2017 venue="NeurIPS"
+  Reasoning: 8 total authors, 4 cited in correct order (Vaswani→Shazeer→Parmar
+  →Uszkoreit) = 50% ≥ 50%. Year and venue match.
+  Output: {{"label":"VALID","confidence":0.95,"reason":"Title, authors (4 of 8
+           in correct order), year, and venue all match."}}
+
+Example 2 (PARTIALLY_VALID — multi-author, <50% cited):
   Input: title="Attention is all you need" authors="Vaswani, Shazeer, Parmar"
-         year=2017 venue="Proc. ICML, Stockholm, Sweden"
+         year=2018 venue="ICML"
   Candidate: title="Attention is All You Need" authors="Ashish Vaswani, Noam
              Shazeer, Niki Parmar..." year=2017 venue="NeurIPS"
-  Note: Year matches, authors match approximately. Venue in citation is wrong
-  (ICML vs NeurIPS) so this is PARTIALLY_VALID, not VALID.
+  Output: {{"label":"PARTIALLY_VALID","confidence":0.75,"reason":"Title matches
+           and 3 of 8 authors in correct order but year differs (cited 2018,
+           actual 2017) and venue differs (cited ICML, actual NeurIPS)."}}
 
-Example 2 (PARTIALLY_VALID — wrong year, venue name and location):
-  Input: title="Attention is all you need" authors="Vaswani, N." year=2018
-         venue="ICML, Stockholm, Sweden"
-  Candidate: title="Attention is All You Need" authors="Ashish Vaswani..."
-             year=2017 venue="NeurIPS"
-  Output: {{"label":"PARTIALLY_VALID","confidence":0.75,"reason":"Title and
-           authors match but year differs (cited 2018, actual 2017) and venue
-           differs (cited ICML, actual NeurIPS)."}}
-
-Example 3 (PARTIALLY_VALID — wrong venue location only should NOT be flagged,
-           but wrong author IS flagged):
+Example 3 (PARTIALLY_VALID — wrong author, even though venue location differs
+           only, do NOT flag location):
   Input: title="Attention is all you need" authors="Smith, J." year=2017
-         venue="NeurIPS"
+         venue="NeurIPS, Long Beach, CA"
   Candidate: title="Attention is All You Need" authors="Ashish Vaswani..."
-             year=2017 venue="NeurIPS"
-  Output: {{"label":"PARTIALLY_VALID","confidence":0.65,"reason":"Title matches
-           but authors do not match the database record."}}
+             year=2017 venue="NeurIPS, Vancouver"
+  Output: {{"label":"PARTIALLY_VALID","confidence":0.55,"reason":"Title and
+           venue match but authors do not match the database record."}}
 
 Example 4 (HALLUCINATED):
   Input: title="Deep reinforcement learning with quantum networks"

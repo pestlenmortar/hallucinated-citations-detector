@@ -10,6 +10,13 @@ Classification rules:
   combination, or venue is made up. Treat suspicious or non-existent papers as
   HALLUCINATED.
 
+Author matching rules:
+- The ORDER of cited authors must match the order in the real paper (first to
+  last). Authors listed in wrong order is a mismatch.
+- If the real paper has MORE THAN 5 total authors and at least 50% of them are
+  correctly cited in the correct order, the authors field is VALID.
+- If the real paper has 5 or fewer authors, all of them should match.
+
 Venue location rules:
 - The venue NAME (conference/journal) is what matters, NOT the city or country
   where it was held. Different host cities for the same conference are NOT a
@@ -18,7 +25,8 @@ Venue location rules:
 
 In your "reason", report which specific fields seem wrong.
 For example: "year differs (cited 2018, actual 2017)" or "venue differs
-(cited ICML, actual NeurIPS)".
+(cited ICML, actual NeurIPS)" or "authors: 3 of 8 in correct order"
+or "authors do not match".
 
 Be conservative. If you are unsure, prefer HALLUCINATED or PARTIALLY_VALID over
 VALID. Only return VALID if you are confident the paper is real.
