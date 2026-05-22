@@ -3,7 +3,7 @@ import os
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
-from ..llm.json_schema import LLMOutput
+from llm.json_schema import LLMOutput
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5:3b"
@@ -19,6 +19,13 @@ def heuristic_verify(top_candidate: dict) -> dict:
             "label": "HALLUCINATED",
             "confidence": 0.0,
             "reason": "No candidate provided",
+        }
+
+    if top_candidate.get("fuzzy_score", 0.0) == 100.0:
+        return {
+            "label": "VALID",
+            "confidence": 1.0,
+            "reason": "Exact title match found in database",
         }
 
     fuzzy = top_candidate.get("fuzzy_score", 0.0)

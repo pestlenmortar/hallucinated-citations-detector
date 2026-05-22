@@ -74,9 +74,9 @@ def validate(req: ValidateRequest) -> dict:
     top = fused[0] if fused else {}
     result = heuristic_verify(top)
 
-    if config.USE_LLM and fused:
+    if config.USE_LLM and fused and result.get("label") == "PARTIALLY_VALID":
         llm_result = llm_verify(fused, parsed)
-        if llm_result.get("label"):
+        if llm_result.get("label") == "VALID":
             result = llm_result
 
     return {
