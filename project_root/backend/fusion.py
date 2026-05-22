@@ -1,7 +1,16 @@
 import sqlite3
+import re
 
-# Ranking weights — title-dominated to ensure the correct paper surfaces to the top
-# Verification weights are in verifier.py (metadata-emphasizing)
+from rapidfuzz import fuzz
+
+VENUE_STOPWORDS = frozenset({
+    "in", "on", "of", "the", "and", "for", "a", "an", "to", "with",
+    "at", "by", "is", "was", "are", "its", "their", "this", "that",
+    "from", "as", "be", "or", "but", "not", "so", "if", "it", "we",
+    "our", "all", "no", "has", "have", "been", "were", "can", "will",
+    "do", "did", "each", "any", "also", "than", "then",
+})
+
 RANK_TITLE_W = 0.45
 RANK_AUTHOR_W = 0.15
 RANK_YEAR_W = 0.10
@@ -18,6 +27,27 @@ def _token_overlap(a: str, b: str) -> float:
     if not tokens_a or not tokens_b:
         return 0.0
     return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+def _venue_similarity(p_venue: str, db_venue: str) -> float:
+    if not p_venue or not db_venue:
+        return 0.0
+    def strip(text):
+        clean = re.sub(r"[^\w\s]", " ", text.lower())
+        return " ".join(
+            t for t in clean.split()
+            if t not in VENUE_STOPWORDS
+            and any(c.isalpha() for c in t)
+        )
+    clean_p, clean_d = strip(p_venue), strip(db_venue)
+    tokens_p = set(clean_p.split())
+    tokens_d = set(clean_d.split())
+    if not tokens_p or not tokens_d:
+        return 0.0
+    overlap = len(tokens_p & tokens_d) / min(len(tokens_p), len(tokens_d))
+    if overlap >= 0.2:
+        return fuzz.token_set_ratio(clean_p, clean_d) / 100.0
+    return 0.0
 
 
 def _year_similarity(db_year, parsed_year) -> float:
@@ -93,7 +123,7 @@ def fuse_candidates(
         sem_sim = 1.0 / (1.0 + semantic_score) if semantic_score else 0.0
         author_sim = _token_overlap(p_authors, db_authors)
         year_sim = _year_similarity(db_year, p_year)
-        venue_sim = _token_overlap(p_venue, db_venue)
+        venue_sim = _venue_similarity(p_venue, db_venue)
         doi_sim = _doi_similarity(db_doi, p_doi)
 
         metadata_score = (author_sim + year_sim + venue_sim + doi_sim) / 4.0

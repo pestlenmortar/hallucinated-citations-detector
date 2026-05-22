@@ -1,7 +1,10 @@
 import json
+import re
 import urllib.parse
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+from rapidfuzz import fuzz
 
 from . import config
 
@@ -46,7 +49,44 @@ def _year_similarity(db_year, parsed_year) -> float:
     return 0.0
 
 
+def _venue_similarity(p_venue: str, api_venue: str) -> float:
+    if not p_venue or not api_venue:
+        return 0.0
+    stopwords = frozenset({
+        "in", "on", "of", "the", "and", "for", "a", "an", "to", "with",
+        "at", "by", "is", "was", "are", "its", "their", "this", "that",
+        "from", "as", "be", "or", "but", "not", "so", "if", "it", "we",
+        "our", "all", "no", "has", "have", "been", "were", "can", "will",
+        "do", "did", "each", "any", "also", "than", "then",
+    })
+    def strip(text):
+        clean = re.sub(r"[^\w\s]", " ", text.lower())
+        return " ".join(
+            t for t in clean.split()
+            if t not in stopwords
+            and any(c.isalpha() for c in t)
+        )
+    clean_p, clean_a = strip(p_venue), strip(api_venue)
+    tokens_p = set(clean_p.split())
+    tokens_a = set(clean_a.split())
+    if not tokens_p or not tokens_a:
+        return 0.0
+    overlap = len(tokens_p & tokens_a) / min(len(tokens_p), len(tokens_a))
+    if overlap >= 0.2:
+        return fuzz.token_set_ratio(clean_p, clean_a) / 100.0
+    return 0.0
+
+
 def _doi_similarity(api_doi: str | None, parsed_doi: str) -> float:
+    if not api_doi or not parsed_doi:
+        return 0.0
+    a = api_doi.lower().strip()
+    p = parsed_doi.lower().strip()
+    if a == p:
+        return 1.0
+    if p in a or a in p:
+        return 0.8
+    return 0.0
     if not api_doi or not parsed_doi:
         return 0.0
     a = api_doi.lower().strip()
@@ -105,7 +145,7 @@ def live_lookup_verify(parsed: dict) -> dict | None:
         title_sim = _token_overlap(query.lower(), title.lower())
         author_sim = _token_overlap(p_authors.lower(), authors.lower()) if p_authors else 0.0
         year_sim = _year_similarity(year, p_year)
-        venue_sim = _token_overlap(p_venue.lower(), venue.lower()) if p_venue else 0.0
+        venue_sim = _venue_similarity(p_venue, venue)
         doi_sim = _doi_similarity(api_doi, p_doi)
 
         score = (

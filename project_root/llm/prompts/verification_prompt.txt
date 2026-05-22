@@ -11,36 +11,51 @@ Classification rules:
 - "HALLUCINATED" — no candidate matches the input citation by title, authors,
   or any combination of metadata fields.
 
-Weight the evidence by importance: authors and year carry the most weight
-(followed by venue, then title overlap, then DOI). A perfect title match with
-wrong year and wrong venue MUST be classified as PARTIALLY_VALID, not VALID.
+Venue location rules:
+- The venue NAME (conference/journal) is what matters, NOT the city or country
+  where it was held.
+- "Proc. International Conference on Machine Learning (ICML), Stockholm, Sweden"
+  and "International Conference on Machine Learning" are the SAME venue.
+- "Stockholm, Sweden" vs "Long Beach, CA" are just different host cities for the
+  same conference — do NOT flag as a venue mismatch.
+- Different conference names IS a mismatch (e.g. "ICML" vs "NeurIPS").
+- Abbreviations of the same venue are fine (e.g. "ICML" == "International
+  Conference on Machine Learning").
+
+In your "reason", report which specific fields do not match. For example:
+- If year is wrong: "year differs (cited 2018, actual 2017)"
+- If venue name is different: "venue differs (cited ICML, actual NeurIPS)"
+- If venue location is different: do NOT mention this
+- If authors don't match: "authors do not match"
+- If DOI is wrong: "DOI mismatch"
 
 --- EXAMPLES ---
 
-Example 1 (VALID):
+Example 1 (VALID — same venue, different city):
   Input: title="Attention is all you need" authors="Vaswani, Shazeer, Parmar"
-         year=2017 venue="NeurIPS"
+         year=2017 venue="Proc. ICML, Stockholm, Sweden"
   Candidate: title="Attention is All You Need" authors="Ashish Vaswani, Noam
              Shazeer, Niki Parmar..." year=2017 venue="NeurIPS"
-  Output: {{"label":"VALID","confidence":0.98,"reason":"Title, authors, year,
-           and venue all match."}}
+  Note: Year matches, authors match approximately. Venue in citation is wrong
+  (ICML vs NeurIPS) so this is PARTIALLY_VALID, not VALID.
 
-Example 2 (PARTIALLY_VALID — wrong year and venue):
+Example 2 (PARTIALLY_VALID — wrong year, venue name and location):
   Input: title="Attention is all you need" authors="Vaswani, N." year=2018
-         venue="ICML"
-  Candidate: title="Attention is All You Need" authors="Ashish Vaswani, Noam
-             Shazeer, Niki Parmar..." year=2017 venue="NeurIPS"
-  Output: {{"label":"PARTIALLY_VALID","confidence":0.75,"reason":"Title and
-           authors match but year and venue are incorrect (real paper is
-           NeurIPS 2017)."}}
-
-Example 3 (PARTIALLY_VALID — wrong author and venue):
-  Input: title="Attention is all you need" authors="Smith, J." year=2017
-         venue="ICLR"
+         venue="ICML, Stockholm, Sweden"
   Candidate: title="Attention is All You Need" authors="Ashish Vaswani..."
              year=2017 venue="NeurIPS"
-  Output: {{"label":"PARTIALLY_VALID","confidence":0.60,"reason":"Title matches
-           but authors and venue do not match the database record."}}
+  Output: {{"label":"PARTIALLY_VALID","confidence":0.75,"reason":"Title and
+           authors match but year differs (cited 2018, actual 2017) and venue
+           differs (cited ICML, actual NeurIPS)."}}
+
+Example 3 (PARTIALLY_VALID — wrong venue location only should NOT be flagged,
+           but wrong author IS flagged):
+  Input: title="Attention is all you need" authors="Smith, J." year=2017
+         venue="NeurIPS"
+  Candidate: title="Attention is All You Need" authors="Ashish Vaswani..."
+             year=2017 venue="NeurIPS"
+  Output: {{"label":"PARTIALLY_VALID","confidence":0.65,"reason":"Title matches
+           but authors do not match the database record."}}
 
 Example 4 (HALLUCINATED):
   Input: title="Deep reinforcement learning with quantum networks"
@@ -48,7 +63,8 @@ Example 4 (HALLUCINATED):
   Candidate: title="Deep Reinforcement Learning That Matters"
              authors="Henderson, Islam..." year=2018
   Output: {{"label":"HALLUCINATED","confidence":0.15,"reason":"No candidate
-           matches the input citation. Title and authors differ substantially."}}
+           matches. Title, authors, year, and venue all differ from any
+           database record."}}
 
 --- END EXAMPLES ---
 
@@ -67,4 +83,4 @@ Top Candidates:
 Respond with ONLY a JSON object (no extra text, no markdown) with these keys:
 - "label": "VALID", "PARTIALLY_VALID", or "HALLUCINATED"
 - "confidence": float between 0.0 and 1.0
-- "reason": one sentence maximum
+- "reason": one sentence listing which specific fields mismatch, if any
