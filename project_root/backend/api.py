@@ -7,6 +7,7 @@ from . import config
 from .parser import parse_citation
 from .normalization import normalize_title
 from .fusion import fuse_candidates
+from .live_lookup import live_lookup_verify
 from .verifier import heuristic_verify, llm_verify
 
 app = FastAPI(title="Citation Validator API")
@@ -79,11 +80,19 @@ def validate(req: ValidateRequest) -> dict:
         if llm_result.get("label") == "VALID":
             result = llm_result
 
+    if config.USE_LIVE_LOOKUP and result.get("label") == "HALLUCINATED":
+        live_result = live_lookup_verify(parsed)
+        if live_result:
+            result = live_result
+
     return {
-        "label": result.get("label", "HALLUCINATED"),
-        "confidence": result.get("confidence", 0.0),
-        "top_matches": fused,
-        "reason": result.get("reason", ""),
+        k: v for k, v in {
+            "label": result.get("label", "HALLUCINATED"),
+            "confidence": result.get("confidence", 0.0),
+            "top_matches": fused,
+            "reason": result.get("reason", ""),
+            "live_match": result.get("live_match"),
+        }.items() if v is not None
     }
 
 
