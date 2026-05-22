@@ -31,8 +31,8 @@ def _component_score(candidate: dict) -> float:
     year_sim = candidate.get("year_similarity", 0.0)
     venue_sim = candidate.get("venue_similarity", 0.0)
     doi_sim = candidate.get("doi_similarity", 0.0)
-    sem_raw = candidate.get("semantic_score", 999.0)
-    sem_sim = 1.0 / (1.0 + sem_raw) if sem_raw != 0.0 else 0.0
+    sem_raw = candidate.get("semantic_score", -1.0)
+    sem_sim = 1.0 / (1.0 + sem_raw) if sem_raw >= 0 else 0.0
 
     return round(
         TITLE_W * title_sim

@@ -83,11 +83,23 @@ def validate(req: ValidateRequest) -> dict:
     result = heuristic_verify(top)
     source = "db_heuristic"
 
-    if config.USE_LLM and fused and result.get("label") == "PARTIALLY_VALID":
-        llm_result = llm_verify(fused, parsed)
-        if llm_result.get("label") == "VALID":
-            result = llm_result
-            source = "llm_deepseek"
+    if config.USE_LLM and fused:
+        top_c = fused[0]
+        f_sim = top_c.get("fuzzy_score", 0.0) / 100.0
+        s_raw = top_c.get("semantic_score", -1.0)
+        s_sim = 1.0 / (1.0 + s_raw) if s_raw >= 0 else 0.0
+        match_q = (f_sim + s_sim) / 2.0
+
+        if match_q >= 0.6:
+            llm_result = llm_verify(fused, parsed)
+            if llm_result:
+                result = llm_result
+                source = "llm_deepseek"
+        elif result.get("label") == "PARTIALLY_VALID":
+            llm_result = llm_verify(fused, parsed)
+            if llm_result and llm_result.get("label") == "VALID":
+                result = llm_result
+                source = "llm_deepseek"
 
     if config.USE_LIVE_LOOKUP and result.get("label") == "HALLUCINATED":
         live_result = live_lookup_verify(parsed)

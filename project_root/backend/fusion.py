@@ -110,7 +110,7 @@ def fuse_candidates(
         semantic_entry = semantic_by_id.get(pid)
 
         fuzzy_score = fuzzy_entry["score"] if fuzzy_entry else 0.0
-        semantic_score = semantic_entry["score"] if semantic_entry else 0.0
+        semantic_score = round(semantic_entry["score"], 4) if semantic_entry else -1.0
 
         info = db_info.get(pid, {})
         db_title = info.get("title") or ""
@@ -120,7 +120,7 @@ def fuse_candidates(
         db_doi = info.get("doi") or ""
 
         title_sim = fuzzy_score / 100.0
-        sem_sim = 1.0 / (1.0 + semantic_score) if semantic_score else 0.0
+        sem_sim = 1.0 / (1.0 + semantic_score) if semantic_entry is not None else 0.0
         author_sim = _token_overlap(p_authors, db_authors)
         year_sim = _year_similarity(db_year, p_year)
         venue_sim = _venue_similarity(p_venue, db_venue)
