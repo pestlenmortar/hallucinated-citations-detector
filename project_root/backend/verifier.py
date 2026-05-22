@@ -3,11 +3,12 @@ import os
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
+from . import config
 from llm.json_schema import LLMOutput
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "qwen2.5:3b"
-OLLAMA_TIMEOUT = 30
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_TIMEOUT = 30
 PROMPT_PATH = os.path.join(
     os.path.dirname(__file__), "..", "llm", "prompts", "verification_prompt.txt"
 )
@@ -81,17 +82,29 @@ def _load_prompt_template() -> str:
         return f.read()
 
 
-def _call_ollama(prompt: str) -> dict | None:
-    payload = json.dumps(
-        {"model": OLLAMA_MODEL, "prompt": prompt, "format": "json", "stream": False}
-    ).encode("utf-8")
+def _call_deepseek(prompt: str) -> dict | None:
+    api_key = config.DEEPSEEK_API_KEY
+    if not api_key:
+        return None
+    payload = json.dumps({
+        "model": DEEPSEEK_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.0,
+    }).encode("utf-8")
     req = Request(
-        OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"}
+        DEEPSEEK_API_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
     )
     try:
-        with urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:
+        with urlopen(req, timeout=DEEPSEEK_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return json.loads(data["response"])
+            content = data["choices"][0]["message"]["content"]
+            return json.loads(content)
     except (URLError, json.JSONDecodeError, KeyError, OSError):
         return None
 
@@ -108,7 +121,7 @@ def llm_verify(top_candidates: list, parsed_citation: dict) -> dict:
         candidate_table=candidate_table,
     )
 
-    raw = _call_ollama(prompt)
+    raw = _call_deepseek(prompt)
     if raw is None:
         first = top_candidates[0] if top_candidates else {}
         return heuristic_verify(first)
