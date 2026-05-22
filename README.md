@@ -17,7 +17,7 @@ FastAPI Backend
     |-- semantic_search.py -> Sentence-Transformers + FAISS
     |-- fusion.py        -> weighted scoring of candidates
     |-- verifier.py      -> heuristic and/or LLM verification
-    |                       (Ollama + qwen2.5:3b)
+    |                       (DeepSeek Chat API)
     |
     v
 SQLite (papers.db) <-- ingest_openalex.py (OpenAlex API)
@@ -86,7 +86,7 @@ project_root/
 
 ### External Services
 
-- **Ollama** (optional) -- required only if LLM-based verification is enabled. The default model is `qwen2.5:3b`.
+- **DeepSeek API** (optional) -- required only if LLM-based verification is enabled. Uses `deepseek-chat` model. Set `DEEPSEEK_API_KEY` in `.env`.
 
 ## Setup and Usage
 
@@ -96,10 +96,12 @@ project_root/
 pip install fastapi uvicorn pydantic python-dotenv rapidfuzz faiss-cpu sentence-transformers numpy streamlit pandas
 ```
 
-### 2. (Optional) Pull LLM Model
+### 2. (Optional) Download SentenceTransformer Model
+
+The SentenceTransformer model (`all-MiniLM-L6-v2`) is downloaded automatically on first use by the backend. You can also pre-download it manually:
 
 ```bash
-ollama pull qwen2.5:3b
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 ```
 
 ### 3. Ingest Paper Data
@@ -128,10 +130,10 @@ Create or edit `project_root/.env`:
 DB_PATH=papers.db
 FAISS_INDEX_PATH=faiss_index.bin
 USE_LLM=false
-OLLAMA_MODEL=qwen2.5:3b
+DEEPSEEK_API_KEY=your_api_key_here
 ```
 
-Set `USE_LLM=true` to enable verification via Ollama.
+Set `USE_LLM=true` and provide a valid `DEEPSEEK_API_KEY` to enable LLM-based verification via the DeepSeek API.
 
 ### 6. Start the Backend
 

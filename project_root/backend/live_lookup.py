@@ -46,6 +46,30 @@ def _year_similarity(db_year, parsed_year) -> float:
     return 0.0
 
 
+def _doi_similarity(api_doi: str | None, parsed_doi: str) -> float:
+    if not api_doi or not parsed_doi:
+        return 0.0
+    a = api_doi.lower().strip()
+    p = parsed_doi.lower().strip()
+    if a == p:
+        return 1.0
+    if p in a or a in p:
+        return 0.8
+    return 0.0
+
+
+TITLE_W = 0.10
+AUTHOR_W = 0.30
+YEAR_W = 0.30
+VENUE_W = 0.20
+DOI_W = 0.05
+SEMANTIC_W = 0.05
+API_SCORE_CAP_VALID = 0.90
+API_SCORE_CAP_PARTIAL = 0.70
+VALID_THRESHOLD = 0.45
+PARTIAL_THRESHOLD = 0.25
+
+
 def live_lookup_verify(parsed: dict) -> dict | None:
     query = parsed.get("title", "")
     if not query:
@@ -57,6 +81,8 @@ def live_lookup_verify(parsed: dict) -> dict | None:
 
     p_authors = parsed.get("authors", "") or ""
     p_year = parsed.get("year")
+    p_venue = parsed.get("venue", "") or ""
+    p_doi = parsed.get("doi", "") or ""
 
     best_score = 0.0
     best_paper = None
@@ -66,41 +92,56 @@ def live_lookup_verify(parsed: dict) -> dict | None:
         authors_list = paper.get("authors", [])
         authors = ", ".join(a.get("name", "") for a in authors_list if a.get("name"))
         year = paper.get("year")
+        venue = paper.get("venue")
+        if not venue:
+            pv = paper.get("publicationVenue")
+            if pv:
+                venue = pv.get("name")
+        venue = venue or ""
+
+        ext_ids = paper.get("externalIds") or {}
+        api_doi = ext_ids.get("DOI", "") or ""
 
         title_sim = _token_overlap(query.lower(), title.lower())
         author_sim = _token_overlap(p_authors.lower(), authors.lower()) if p_authors else 0.0
         year_sim = _year_similarity(year, p_year)
+        venue_sim = _token_overlap(p_venue.lower(), venue.lower()) if p_venue else 0.0
+        doi_sim = _doi_similarity(api_doi, p_doi)
 
-        score = 0.5 * title_sim + 0.3 * author_sim + 0.2 * year_sim
+        score = (
+            TITLE_W * title_sim
+            + AUTHOR_W * author_sim
+            + YEAR_W * year_sim
+            + VENUE_W * venue_sim
+            + DOI_W * doi_sim
+        )
 
         if score > best_score:
             best_score = score
-            venue = paper.get("venue")
-            if not venue:
-                pv = paper.get("publicationVenue")
-                if pv:
-                    venue = pv.get("name")
             best_paper = {
                 "title": title,
                 "authors": authors,
                 "year": year,
                 "venue": venue,
+                "doi": api_doi,
             }
 
-    if best_score >= 0.7:
+    if best_score >= VALID_THRESHOLD:
         return {
             "label": "VALID",
-            "confidence": round(best_score, 4),
+            "confidence": round(min(best_score, API_SCORE_CAP_VALID), 4),
             "reason": "Paper found via Semantic Scholar live lookup",
             "live_match": best_paper,
+            "source": "live_lookup",
         }
 
-    if best_score >= 0.4:
+    if best_score >= PARTIAL_THRESHOLD:
         return {
             "label": "PARTIALLY_VALID",
-            "confidence": round(best_score, 4),
+            "confidence": round(min(best_score, API_SCORE_CAP_PARTIAL), 4),
             "reason": "Partial match found via Semantic Scholar live lookup",
             "live_match": best_paper,
+            "source": "live_lookup",
         }
 
     return None

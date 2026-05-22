@@ -8,9 +8,16 @@ from .parser import parse_citation
 from .normalization import normalize_title
 from .fusion import fuse_candidates
 from .live_lookup import live_lookup_verify
-from .verifier import heuristic_verify, llm_verify
+from .verifier import heuristic_verify, llm_verify, llm_verify_direct
 
 app = FastAPI(title="Citation Validator API")
+
+
+@app.on_event("startup")
+def startup():
+    from .semantic_search import load_model
+
+    load_model()
 
 
 class ValidateRequest(BaseModel):
@@ -74,21 +81,31 @@ def validate(req: ValidateRequest) -> dict:
 
     top = fused[0] if fused else {}
     result = heuristic_verify(top)
+    source = "db_heuristic"
 
     if config.USE_LLM and fused and result.get("label") == "PARTIALLY_VALID":
         llm_result = llm_verify(fused, parsed)
         if llm_result.get("label") == "VALID":
             result = llm_result
+            source = "llm_deepseek"
 
     if config.USE_LIVE_LOOKUP and result.get("label") == "HALLUCINATED":
         live_result = live_lookup_verify(parsed)
         if live_result:
             result = live_result
+            source = result.get("source", "live_lookup")
+
+    if config.USE_LLM and result.get("label") == "HALLUCINATED":
+        llm_result = llm_verify_direct(parsed)
+        if llm_result:
+            result = llm_result
+            source = "llm_deepseek"
 
     return {
         k: v for k, v in {
             "label": result.get("label", "HALLUCINATED"),
             "confidence": result.get("confidence", 0.0),
+            "source": source,
             "top_matches": fused,
             "reason": result.get("reason", ""),
             "live_match": result.get("live_match"),

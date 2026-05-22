@@ -1,26 +1,56 @@
-You are a citation classifier. Your job is to compare an input citation against
-candidate papers retrieved from a database and classify the match. Do NOT retrieve
-any papers yourself. Do NOT invent or hallucinate any information. Only use the
-data provided below.
+You are a citation verifier that checks whether an input citation matches a real
+academic paper. Compare ALL metadata fields (title, authors, year, venue, DOI)
+against the candidates. Do NOT retrieve papers yourself; only use the data below.
 
---- EXAMPLE (do not use this for the real task) ---
+Classification rules:
+- "VALID" — title AND authors match AND year is within +/-1 AND venue/DOI are
+  consistent with the candidate. All metadata fields must align.
+- "PARTIALLY_VALID" — title or authors match a candidate BUT at least one of
+  year, venue, or DOI is wrong or inconsistent. The paper exists but the
+  citation has incorrect metadata.
+- "HALLUCINATED" — no candidate matches the input citation by title, authors,
+  or any combination of metadata fields.
 
-Input Citation:
-- Title: Deep Learning in NLP
-- Authors: Smith, J.
-- Year: 2020
-- Venue: ACL
-- DOI: 10.1234/acl.2020.001
+Weight the evidence by importance: authors and year carry the most weight
+(followed by venue, then title overlap, then DOI). A perfect title match with
+wrong year and wrong venue MUST be classified as PARTIALLY_VALID, not VALID.
 
-Candidates:
-  1. paper_id=42 title="Deep Learning in NLP"
-  2. paper_id=99 title="Deep Learning for Text"
+--- EXAMPLES ---
 
-Output:
-{{"label": "VALID", "confidence": 0.92, "reason": "Title and author match the
-input citation with high confidence."}}
+Example 1 (VALID):
+  Input: title="Attention is all you need" authors="Vaswani, Shazeer, Parmar"
+         year=2017 venue="NeurIPS"
+  Candidate: title="Attention is All You Need" authors="Ashish Vaswani, Noam
+             Shazeer, Niki Parmar..." year=2017 venue="NeurIPS"
+  Output: {{"label":"VALID","confidence":0.98,"reason":"Title, authors, year,
+           and venue all match."}}
 
---- END OF EXAMPLE ---
+Example 2 (PARTIALLY_VALID — wrong year and venue):
+  Input: title="Attention is all you need" authors="Vaswani, N." year=2018
+         venue="ICML"
+  Candidate: title="Attention is All You Need" authors="Ashish Vaswani, Noam
+             Shazeer, Niki Parmar..." year=2017 venue="NeurIPS"
+  Output: {{"label":"PARTIALLY_VALID","confidence":0.75,"reason":"Title and
+           authors match but year and venue are incorrect (real paper is
+           NeurIPS 2017)."}}
+
+Example 3 (PARTIALLY_VALID — wrong author and venue):
+  Input: title="Attention is all you need" authors="Smith, J." year=2017
+         venue="ICLR"
+  Candidate: title="Attention is All You Need" authors="Ashish Vaswani..."
+             year=2017 venue="NeurIPS"
+  Output: {{"label":"PARTIALLY_VALID","confidence":0.60,"reason":"Title matches
+           but authors and venue do not match the database record."}}
+
+Example 4 (HALLUCINATED):
+  Input: title="Deep reinforcement learning with quantum networks"
+         authors="Sutton, R." year=2025 venue="Nature"
+  Candidate: title="Deep Reinforcement Learning That Matters"
+             authors="Henderson, Islam..." year=2018
+  Output: {{"label":"HALLUCINATED","confidence":0.15,"reason":"No candidate
+           matches the input citation. Title and authors differ substantially."}}
+
+--- END EXAMPLES ---
 
 Now classify the following:
 
@@ -31,10 +61,10 @@ Input Citation:
 - Venue: {parsed_venue}
 - DOI: {parsed_doi}
 
-Top 3 Candidates:
+Top Candidates:
 {candidate_table}
 
-Respond with ONLY a JSON object (no extra text, no markdown) with these exact keys:
-- "label": one of "VALID", "PARTIALLY_VALID", "HALLUCINATED"
-- "confidence": a float between 0.0 and 1.0
+Respond with ONLY a JSON object (no extra text, no markdown) with these keys:
+- "label": "VALID", "PARTIALLY_VALID", or "HALLUCINATED"
+- "confidence": float between 0.0 and 1.0
 - "reason": one sentence maximum

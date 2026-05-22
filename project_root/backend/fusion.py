@@ -1,5 +1,14 @@
 import sqlite3
 
+# Ranking weights — title-dominated to ensure the correct paper surfaces to the top
+# Verification weights are in verifier.py (metadata-emphasizing)
+RANK_TITLE_W = 0.45
+RANK_AUTHOR_W = 0.15
+RANK_YEAR_W = 0.10
+RANK_VENUE_W = 0.05
+RANK_DOI_W = 0.02
+RANK_SEMANTIC_W = 0.23
+
 
 def _token_overlap(a: str, b: str) -> float:
     if not a or not b:
@@ -21,6 +30,18 @@ def _year_similarity(db_year, parsed_year) -> float:
     return 0.0
 
 
+def _doi_similarity(db_doi: str | None, parsed_doi: str) -> float:
+    if not db_doi or not parsed_doi:
+        return 0.0
+    db_clean = db_doi.lower().strip()
+    p_clean = parsed_doi.lower().strip()
+    if db_clean == p_clean:
+        return 1.0
+    if p_clean in db_clean or db_clean in p_clean:
+        return 0.8
+    return 0.0
+
+
 def fuse_candidates(
     fuzzy_results: list,
     semantic_results: list,
@@ -37,19 +58,21 @@ def fuse_candidates(
     conn = sqlite3.connect(db_path)
     placeholders = ",".join("?" * len(paper_ids))
     rows = conn.execute(
-        f"SELECT paper_id, title, authors, year, venue FROM papers WHERE paper_id IN ({placeholders})",
+        f"SELECT paper_id, title, authors, year, venue, doi FROM papers WHERE paper_id IN ({placeholders})",
         list(paper_ids),
     ).fetchall()
     conn.close()
 
     db_info = {
-        row[0]: {"title": row[1], "authors": row[2], "year": row[3], "venue": row[4]}
+        row[0]: {"title": row[1], "authors": row[2], "year": row[3],
+                  "venue": row[4], "doi": row[5]}
         for row in rows
     }
 
     p_authors = parsed_citation.get("authors", "") or ""
     p_year = parsed_citation.get("year")
     p_venue = parsed_citation.get("venue", "") or ""
+    p_doi = parsed_citation.get("doi", "") or ""
 
     candidates = []
     for pid in paper_ids:
@@ -64,13 +87,25 @@ def fuse_candidates(
         db_authors = info.get("authors") or ""
         db_year = info.get("year")
         db_venue = info.get("venue") or ""
+        db_doi = info.get("doi") or ""
 
+        title_sim = fuzzy_score / 100.0
+        sem_sim = 1.0 / (1.0 + semantic_score) if semantic_score else 0.0
         author_sim = _token_overlap(p_authors, db_authors)
         year_sim = _year_similarity(db_year, p_year)
         venue_sim = _token_overlap(p_venue, db_venue)
+        doi_sim = _doi_similarity(db_doi, p_doi)
 
-        metadata_score = (author_sim + year_sim + venue_sim) / 3.0
-        final_score = 0.5 * fuzzy_score + 0.4 * semantic_score + 0.1 * metadata_score
+        metadata_score = (author_sim + year_sim + venue_sim + doi_sim) / 4.0
+        final_score = round(
+            RANK_TITLE_W * title_sim * 100
+            + RANK_AUTHOR_W * author_sim * 100
+            + RANK_YEAR_W * year_sim * 100
+            + RANK_VENUE_W * venue_sim * 100
+            + RANK_DOI_W * doi_sim * 100
+            + RANK_SEMANTIC_W * sem_sim * 100,
+            4,
+        )
 
         candidates.append(
             {
@@ -79,13 +114,15 @@ def fuse_candidates(
                 "authors": db_authors,
                 "year": db_year,
                 "venue": db_venue,
+                "doi": db_doi,
                 "fuzzy_score": round(fuzzy_score, 4),
                 "semantic_score": round(semantic_score, 4),
                 "metadata_score": round(metadata_score, 4),
                 "author_similarity": round(author_sim, 4),
                 "year_similarity": round(year_sim, 4),
                 "venue_similarity": round(venue_sim, 4),
-                "final_score": round(final_score, 4),
+                "doi_similarity": round(doi_sim, 4),
+                "final_score": final_score,
             }
         )
 

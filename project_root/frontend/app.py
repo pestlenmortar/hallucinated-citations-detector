@@ -51,6 +51,13 @@ if "result" in st.session_state:
     label = result.get("label", "")
     confidence = result.get("confidence", 0.0)
     reason = result.get("reason", "")
+    source = result.get("source", "unknown")
+
+    source_label = {
+        "db_heuristic": "Local Database Match",
+        "llm_deepseek": "DeepSeek LLM Verified",
+        "live_lookup": "Semantic Scholar API",
+    }.get(source, source)
 
     if label == "VALID":
         color = "#2e7d32"
@@ -68,18 +75,32 @@ if "result" in st.session_state:
         f'<div style="font-size:2rem;font-weight:700;color:{color};">{label}</div>'
         f'<div style="font-size:1.2rem;margin-top:0.5rem;">'
         f"Confidence: <strong>{confidence:.2f}</strong></div>"
+        f'<div style="margin-top:0.25rem;color:#888;">Source: {source_label}</div>'
         f'<div style="margin-top:0.5rem;color:#555;">{reason}</div>'
         f"</div>",
         unsafe_allow_html=True,
     )
 
+    live = result.get("live_match")
+    if live:
+        st.markdown("### Live Match (Semantic Scholar)")
+        st.markdown(
+            f"**{live.get('title', '')}**  "
+            f"({live.get('year', '')})<br>"
+            f"{live.get('authors', '')}<br>"
+            f"*{live.get('venue', '')}*",
+            unsafe_allow_html=True,
+        )
+
     matches = result.get("top_matches", [])
     if matches:
-        st.subheader("Top Matches")
+        st.subheader("Top DB Matches")
         for i, m in enumerate(matches[:3], 1):
             st.markdown(
-                f"**{i}.** {m.get('title', '')}  "
-                f"— score: {m.get('final_score', 0):.2f}"
+                f"**{i}.** {m.get('title', '')} ({m.get('year', '')})  "
+                f"— fuzzy:{m.get('fuzzy_score', 0):.0f} "
+                f"semantic:{m.get('semantic_score', 0):.2f} "
+                f"final:{m.get('final_score', 0):.2f}"
             )
 
     st.page_link("pages/results.py", label="View detailed results →")

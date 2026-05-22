@@ -17,9 +17,13 @@ AUTHOR_APA_RE = (
 )
 
 # Matches IEEE-style "J. Smith" at the start
+# Handles multiple comma/and-separated authors:
+#   "A. Vaswani, N. Shazeer, and N. Parmar"
 AUTHOR_IEE_RE = (
-    r"(?:[A-Z]\.\s[A-Z][a-z]+(?:\s+[A-Z]\.(?:\s+[A-Z][a-z]+)?)?"
-    r"(?:\s+(?:and|&)\s+[A-Z]\.\s[A-Z][a-z]+(?:\s+[A-Z]\.)?)?)\s*"
+    r"[A-Z]\.\s[A-Z][a-z]+(?:\s+[A-Z]\.(?:\s+[A-Z][a-z]+)?)?"
+    r"(?:,\s*(?:and\s+)?"
+    r"[A-Z]\.\s[A-Z][a-z]+(?:\s+[A-Z]\.(?:\s+[A-Z][a-z]+)?)?)*"
+    r"\s*"
 )
 
 # Matches venue-like segments: journal names starting with a capital
@@ -113,37 +117,38 @@ def parse_citation(raw: str) -> ParsedCitation:
     title = ""
     try_before = False
 
-    if authors and after_year and len(after_year) > 10:
-        # APA-like: authors found at start, title likely after year
+    quoted_title = re.search(r'"([^"]+)"', before_year)
+
+    if quoted_title:
+        title = normalize_title(quoted_title.group(1))
+        try_before = True
+    elif authors and after_year and len(after_year) > 10:
         raw_title = _extract_title_after_year(after_year)
         title = normalize_title(raw_title)
     elif not authors and before_year:
-        # No detectable authors; title is everything before the year
         raw_title = before_year
         title = normalize_title(raw_title)
         try_before = True
     else:
-        # IEEE-like: title is in before_year after stripping authors
         raw_title = _extract_title_before_year(before_year, authors)
         title = normalize_title(raw_title)
         try_before = True
 
-    # Venue: remove extracted title from remaining text
     venue_text = ""
-    if after_year and not try_before:
+    if not try_before and after_year:
         raw_title = _extract_title_after_year(after_year).strip()
         remaining = after_year
         if raw_title and raw_title in remaining:
             remaining = remaining.replace(raw_title, "", 1)
         venue_text = remaining.strip().lstrip(".,; ")
-    elif after_year:
-        venue_text = after_year
     elif before_year and title:
         remaining = before_year[len(authors):].strip().lstrip(".,; ") if authors else before_year
         qm = re.search(r'"([^"]+)"', remaining)
         if qm:
             remaining = remaining.replace(qm.group(0), "", 1).strip().lstrip(".,; ")
         venue_text = remaining
+    elif after_year:
+        venue_text = after_year
     venue = _find_venue(venue_text, doi)
 
     return ParsedCitation(

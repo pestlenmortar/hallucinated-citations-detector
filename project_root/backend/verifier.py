@@ -9,9 +9,56 @@ from llm.json_schema import LLMOutput
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_TIMEOUT = 30
+DIRECT_PROMPT_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "llm", "prompts", "direct_verification_prompt.txt"
+)
 PROMPT_PATH = os.path.join(
     os.path.dirname(__file__), "..", "llm", "prompts", "verification_prompt.txt"
 )
+
+
+TITLE_W = 0.10
+AUTHOR_W = 0.30
+YEAR_W = 0.30
+VENUE_W = 0.20
+DOI_W = 0.05
+SEMANTIC_W = 0.05
+
+
+def _component_score(candidate: dict) -> float:
+    title_sim = candidate.get("fuzzy_score", 0.0) / 100.0
+    author_sim = candidate.get("author_similarity", 0.0)
+    year_sim = candidate.get("year_similarity", 0.0)
+    venue_sim = candidate.get("venue_similarity", 0.0)
+    doi_sim = candidate.get("doi_similarity", 0.0)
+    sem_raw = candidate.get("semantic_score", 999.0)
+    sem_sim = 1.0 / (1.0 + sem_raw) if sem_raw != 0.0 else 0.0
+
+    return round(
+        TITLE_W * title_sim
+        + AUTHOR_W * author_sim
+        + YEAR_W * year_sim
+        + VENUE_W * venue_sim
+        + DOI_W * doi_sim
+        + SEMANTIC_W * sem_sim,
+        4,
+    )
+
+
+def _metadata_present(candidate: dict, field: str) -> bool:
+    val = candidate.get(field, "")
+    return bool(val and str(val).strip())
+
+
+def _detect_metadata_issues(candidate: dict) -> list[str]:
+    issues = []
+    if _metadata_present(candidate, "year") and candidate.get("year_similarity", 0.0) < 0.5:
+        issues.append("year differs")
+    if _metadata_present(candidate, "venue") and candidate.get("venue_similarity", 0.0) < 0.3:
+        issues.append("venue differs")
+    if _metadata_present(candidate, "doi") and candidate.get("doi_similarity", 0.0) < 0.8:
+        issues.append("DOI mismatch")
+    return issues
 
 
 def heuristic_verify(top_candidate: dict) -> dict:
@@ -22,41 +69,44 @@ def heuristic_verify(top_candidate: dict) -> dict:
             "reason": "No candidate provided",
         }
 
-    if top_candidate.get("fuzzy_score", 0.0) == 100.0:
-        return {
-            "label": "VALID",
-            "confidence": 1.0,
-            "reason": "Exact title match found in database",
-        }
-
-    fuzzy = top_candidate.get("fuzzy_score", 0.0)
-    semantic = top_candidate.get("semantic_score", 0.0)
-    final = top_candidate.get("final_score", 0.0)
+    title_sim = top_candidate.get("fuzzy_score", 0.0) / 100.0
     author_sim = top_candidate.get("author_similarity", 0.0)
     year_sim = top_candidate.get("year_similarity", 0.0)
+    final_score = top_candidate.get("final_score", 0.0)
+    score = _component_score(top_candidate)
 
-    title_sim = fuzzy / 100.0
-    year_diff_ok = year_sim >= 0.5
-
-    if title_sim > 0.90 and author_sim > 0.70 and year_diff_ok:
-        conf = round(0.4 * title_sim + 0.3 * author_sim + 0.3 * year_sim, 4)
-        return {
-            "label": "VALID",
-            "confidence": conf,
-            "reason": "Title, author, and year all match within thresholds",
-        }
-
-    if (title_sim > 0.70 or final > 60) and (author_sim > 0.3 or year_diff_ok):
-        conf = round(0.5 * title_sim + 0.3 * author_sim + 0.2 * year_sim, 4)
+    if title_sim >= 0.95 and author_sim >= 0.70:
+        issues = _detect_metadata_issues(top_candidate)
+        if not issues:
+            return {
+                "label": "VALID",
+                "confidence": round(max(0.90, score), 4),
+                "reason": "Title, author, and metadata all match database record",
+            }
         return {
             "label": "PARTIALLY_VALID",
-            "confidence": min(conf, 0.85),
-            "reason": "Partial match found but some metadata is off",
+            "confidence": round(score * 0.85, 4),
+            "reason": f"Title and authors match but {'; '.join(issues)}",
         }
+
+    if title_sim >= 0.95:
+        return {
+            "label": "PARTIALLY_VALID",
+            "confidence": round(score * 0.8, 4),
+            "reason": "Title matches exactly but authors, year, or venue do not match database record",
+        }
+
+    if title_sim >= 0.70 or final_score >= 50:
+        if author_sim >= 0.1 or year_sim >= 0.5:
+            return {
+                "label": "PARTIALLY_VALID",
+                "confidence": round(score, 4),
+                "reason": "Partial match found but some metadata is off",
+            }
 
     return {
         "label": "HALLUCINATED",
-        "confidence": round(max(0.0, title_sim * 0.3), 4),
+        "confidence": round(max(0.0, score * 0.3), 4),
         "reason": "Candidate does not meet minimum similarity thresholds",
     }
 
@@ -72,6 +122,7 @@ def _format_candidates(top_candidates: list) -> str:
             f"author_sim={c.get('author_similarity'):.2f} "
             f"year_sim={c.get('year_similarity'):.2f} "
             f"venue_sim={c.get('venue_similarity'):.2f} "
+            f"doi_sim={c.get('doi_similarity'):.2f} "
             f"final_score={c.get('final_score'):.2f}"
         )
     return "\n".join(lines) if lines else "  (none)"
@@ -132,3 +183,37 @@ def llm_verify(top_candidates: list, parsed_citation: dict) -> dict:
     except Exception:
         first = top_candidates[0] if top_candidates else {}
         return heuristic_verify(first)
+
+
+def _load_direct_prompt_template() -> str:
+    with open(DIRECT_PROMPT_PATH, "r") as f:
+        return f.read()
+
+
+def llm_verify_direct(parsed_citation: dict) -> dict:
+    template = _load_direct_prompt_template()
+    prompt = template.format(
+        parsed_title=parsed_citation.get("title", ""),
+        parsed_authors=parsed_citation.get("authors", ""),
+        parsed_year=parsed_citation.get("year", "unknown"),
+        parsed_venue=parsed_citation.get("venue", ""),
+        parsed_doi=parsed_citation.get("doi", ""),
+    )
+
+    raw = _call_deepseek(prompt)
+    if raw is None:
+        return {
+            "label": "HALLUCINATED",
+            "confidence": 0.0,
+            "reason": "LLM verification unavailable — no database or API match found",
+        }
+
+    try:
+        output = LLMOutput(**raw)
+        return output.model_dump()
+    except Exception:
+        return {
+            "label": "HALLUCINATED",
+            "confidence": 0.0,
+            "reason": "LLM verification failed — no database or API match found",
+        }

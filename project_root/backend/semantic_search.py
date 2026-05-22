@@ -7,6 +7,19 @@ from sentence_transformers import SentenceTransformer
 
 MODEL_NAME = "all-MiniLM-L6-v2"
 
+_model = None
+
+
+def _get_model() -> SentenceTransformer:
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(MODEL_NAME)
+    return _model
+
+
+def load_model():
+    _get_model()
+
 
 def build_faiss_index(db_path: str, index_path: str):
     conn = sqlite3.connect(db_path)
@@ -19,7 +32,7 @@ def build_faiss_index(db_path: str, index_path: str):
     paper_ids = [row[0] for row in rows]
     titles = [row[1] for row in rows]
 
-    model = SentenceTransformer(MODEL_NAME)
+    model = _get_model()
     embeddings = model.encode(titles, show_progress_bar=True)
     embeddings = np.array(embeddings).astype("float32")
 
@@ -39,7 +52,7 @@ def semantic_search(query_title: str, index_path: str, k: int = 10) -> list[dict
     with open(index_path + ".mapping.json", "r") as f:
         mapping = {int(k): v for k, v in json.load(f).items()}
 
-    model = SentenceTransformer(MODEL_NAME)
+    model = _get_model()
     query_vec = model.encode([query_title])
     query_vec = np.array(query_vec).astype("float32")
 
