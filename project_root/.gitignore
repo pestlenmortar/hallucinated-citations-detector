@@ -1,0 +1,20 @@
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Database & indices
+*.db
+*.bin
+*.bin.mapping.json
+faiss_index.bin
+faiss_index.bin.mapping.json
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
