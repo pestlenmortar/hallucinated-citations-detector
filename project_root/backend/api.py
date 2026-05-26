@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import functools
 import sqlite3
 import threading
 import time
@@ -164,7 +165,7 @@ async def validate_batch(req: BatchValidateRequest) -> dict:
     loop = asyncio.get_event_loop()
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(citations)) as pool:
         futures = [
-            loop.run_in_executor(pool, _verify_single, c, True)
+            loop.run_in_executor(pool, functools.partial(_verify_single, batch_mode=True), c)
             for c in citations
         ]
         done_set, _ = await asyncio.wait(futures, timeout=config.BATCH_TIMEOUT)
