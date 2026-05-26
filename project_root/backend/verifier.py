@@ -18,11 +18,11 @@ PROMPT_PATH = os.path.join(
 
 
 TITLE_W = 0.10
-AUTHOR_W = 0.30
-YEAR_W = 0.30
+AUTHOR_W = 0.25
+YEAR_W = 0.25
 VENUE_W = 0.20
 DOI_W = 0.05
-SEMANTIC_W = 0.05
+SEMANTIC_W = 0.15
 
 
 def _component_score(candidate: dict) -> float:

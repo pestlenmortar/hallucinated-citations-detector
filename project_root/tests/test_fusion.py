@@ -63,9 +63,9 @@ fuse_candidates = _fusion_ns["fuse_candidates"]
 # ---------------------------------------------------------------------------
 # Mock rows: (paper_id, title, authors, year, venue)
 MOCK_DB_ROWS = [
-    (1, "Machine Learning", "Smith, J.", 2020, "Journal of AI"),
-    (2, "Deep Learning", "Doe, J.", 2021, "Neural Computing"),
-    (3, "Reinforcement Learning", "Lee, K.", 2019, "IEEE Trans"),
+    (1, "Machine Learning", "Smith, J.", 2020, "Journal of AI", "10.1234/ml"),
+    (2, "Deep Learning", "Doe, J.", 2021, "Neural Computing", "10.1234/dl"),
+    (3, "Reinforcement Learning", "Lee, K.", 2019, "IEEE Trans", "10.1234/rl"),
 ]
 
 

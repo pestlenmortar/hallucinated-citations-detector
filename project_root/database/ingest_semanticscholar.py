@@ -11,13 +11,16 @@ import urllib.error
 
 
 INCOMPLETE_READ_SLEEP = 5
-BASE_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
-LIMIT = 100
-SLEEP_SECONDS = 1.0
-MAX_OFFSET = 9999  # Semantic Scholar caps at ~10k results without API key
+MAX_429_RETRIES = 10
+
+
+BASE_URL = "https://api.openalex.org/works"
+PER_PAGE = 200
+SLEEP_SECONDS = 0.3
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(_SCRIPT_DIR, "papers.db")
+CHECKPOINT_PATH = os.path.join(_SCRIPT_DIR, "ingest_cursor.txt")
 
 
 def normalize_title(title):
@@ -27,31 +30,47 @@ def normalize_title(title):
     return title
 
 
-def extract_authors(authors_list):
-    if not authors_list:
+def reconstruct_abstract(inverted_index):
+    if not inverted_index:
         return None
-    names = [a.get("name") for a in authors_list if a.get("name")]
+    word_positions = []
+    for word, positions in inverted_index.items():
+        for pos in positions:
+            word_positions.append((pos, word))
+    word_positions.sort(key=lambda x: x[0])
+    return " ".join(word for _, word in word_positions)
+
+
+def extract_authors(authorships):
+    if not authorships:
+        return None
+    names = []
+    for entry in authorships:
+        author = entry.get("author", {})
+        name = author.get("display_name")
+        if name:
+            names.append(name)
     return ", ".join(names) if names else None
 
 
-def extract_venue(publication_venue):
-    if publication_venue and publication_venue.get("name"):
-        return publication_venue["name"]
+def extract_venue(primary_location):
+    if primary_location and primary_location.get("source"):
+        return primary_location["source"].get("display_name")
     return None
 
 
-def fetch_papers(search_query, offset=0, max_retries=3, max_429_retries=10):
+def fetch_works(search_query, cursor="*", max_retries=3, max_429_retries=MAX_429_RETRIES):
     params = urllib.parse.urlencode({
-        "query": search_query,
-        "limit": LIMIT,
-        "offset": offset,
-        "fields": "title,authors,year,externalIds,abstract,publicationVenue",
+        "search": search_query,
+        "per_page": PER_PAGE,
+        "cursor": cursor,
+        "mailto": "openalex-ingest@example.com",
     })
     url = f"{BASE_URL}?{params}"
     for attempt in range(1, max_429_retries + 1):
         try:
             req = urllib.request.Request(url)
-            req.add_header("User-Agent", "mailto:s2-ingest@example.com")
+            req.add_header("User-Agent", "mailto:openalex-ingest@example.com")
             with urllib.request.urlopen(req, timeout=30) as resp:
                 body = resp.read().decode("utf-8")
                 return json.loads(body)
@@ -65,7 +84,7 @@ def fetch_papers(search_query, offset=0, max_retries=3, max_429_retries=10):
             raise
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                wait = min(10 * (2 ** (attempt - 1)), 120)
+                wait = min(5 * (2 ** (attempt - 1)), 120)
                 print(f"Rate limited, retrying in {wait}s (attempt {attempt}/{max_429_retries})...")
                 time.sleep(wait)
                 continue
@@ -91,80 +110,111 @@ def fetch_papers(search_query, offset=0, max_retries=3, max_429_retries=10):
             raise
 
 
+def read_checkpoint():
+    try:
+        with open(CHECKPOINT_PATH, "r") as f:
+            cursor = f.read().strip()
+            print(f"Resuming from checkpoint cursor")
+            return cursor
+    except (FileNotFoundError, ValueError):
+        return "*"
+
+
+def write_checkpoint(cursor):
+    with open(CHECKPOINT_PATH, "w") as f:
+        f.write(str(cursor))
+
+
+def clear_checkpoint():
+    try:
+        os.remove(CHECKPOINT_PATH)
+    except FileNotFoundError:
+        pass
+
+
 def ingest_all(search_query, max_records=None):
     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA cache_size=-20000")
+    conn.execute("PRAGMA temp_store=MEMORY")
     with open(schema_path, "r") as f:
         conn.executescript(f.read())
 
-    offset = 0
+    cursor = read_checkpoint()
     inserted = 0
-    batch = 0
+    page = 0
 
-    while offset <= MAX_OFFSET:
-        data = fetch_papers(search_query, offset)
-        results = data.get("data", [])
+    while True:
+        data = fetch_works(search_query, cursor)
+        results = data.get("results", [])
         if not results:
+            clear_checkpoint()
             break
 
-        batch += 1
+        page += 1
         batch_inserted = 0
 
-        for paper in results:
-            external_ids = paper.get("externalIds") or {}
-            doi = external_ids.get("DOI")
+        for work in results:
+            doi = work.get("doi")
             if not doi:
                 continue
 
             doi_clean = doi.split("https://doi.org/")[-1]
-
-            cur = conn.execute("SELECT 1 FROM papers WHERE doi = ?", (doi_clean,))
-            if cur.fetchone():
-                continue
-
-            title = paper.get("title")
+            title = work.get("title")
             normalized_title = normalize_title(title) if title else None
-            authors = extract_authors(paper.get("authors"))
-            year = paper.get("year")
-            venue = extract_venue(paper.get("publicationVenue"))
-            abstract = paper.get("abstract")
+            authors = extract_authors(work.get("authorships"))
+            year = work.get("publication_year")
+            venue = extract_venue(work.get("primary_location"))
+            abstract = reconstruct_abstract(work.get("abstract_inverted_index"))
 
             conn.execute(
-                """INSERT INTO papers
+                """INSERT OR IGNORE INTO papers
                    (title, normalized_title, authors, year, venue, doi, abstract)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (title, normalized_title, authors, year, venue, doi_clean, abstract),
             )
-            inserted += 1
-            batch_inserted += 1
+            if conn.execute("SELECT changes()").fetchone()[0] > 0:
+                paper_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                if title or normalized_title:
+                    conn.execute(
+                        "INSERT INTO papers_fts(rowid, title, normalized_title, abstract) VALUES (?, ?, ?, ?)",
+                        (paper_id, title, normalized_title, abstract),
+                    )
+                inserted += 1
+                batch_inserted += 1
 
             if max_records and inserted >= max_records:
                 break
 
         conn.commit()
 
-        total = data.get("total", "?")
-        next_offset = data.get("next")
-        print(f"  Batch {batch}: {batch_inserted} inserted (total {inserted} so far, {total} available)")
+        total = data.get("meta", {}).get("count", "?")
+        print(f"  Page {page}: {batch_inserted} inserted (total {inserted} so far, {total} available)")
 
         if max_records and inserted >= max_records:
             print(f"Reached target of {max_records} records.")
+            clear_checkpoint()
             break
 
-        if next_offset is None:
+        next_cursor = data.get("meta", {}).get("next_cursor")
+        if not next_cursor:
+            clear_checkpoint()
             break
 
-        offset = next_offset
+        write_checkpoint(next_cursor)
+        cursor = next_cursor
         time.sleep(SLEEP_SECONDS)
 
     conn.close()
+    clear_checkpoint()
     print(f"Ingestion complete. {inserted} records inserted.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ingest papers from Semantic Scholar API")
-    parser.add_argument("query", help="Search query for the Semantic Scholar API")
+    parser = argparse.ArgumentParser(description="Ingest papers from OpenAlex free API")
+    parser.add_argument("query", help="Search query for the OpenAlex API")
     parser.add_argument("--max-records", type=int, default=None,
                         help="Maximum number of records to ingest (default: unlimited)")
     args = parser.parse_args()
