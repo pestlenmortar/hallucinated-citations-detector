@@ -8,17 +8,52 @@ with open("frontend/styles/minimal.css") as f:
 
 st.title("Detailed Results")
 
-if "result" not in st.session_state:
+has_single = "result" in st.session_state
+has_batch = "batch_result" in st.session_state
+
+if not has_single and not has_batch:
     st.info("No results yet. Go back and validate a citation first.")
-    st.page_link("app.py", label="← Back to validator")
+    st.page_link("app.py", label="\u2190 Back to validator")
     st.stop()
 
-result = st.session_state["result"]
+if has_single:
+    result = st.session_state["result"]
+    if has_batch:
+        st.session_state["batch_selected"] = None
+elif has_batch:
+    batch = st.session_state["batch_result"]
+    results = batch["results"]
+    input_citations = st.session_state.get("input_citations", [])
+    selected = st.session_state.get("batch_selected")
+
+    if selected is None:
+        options = {
+            i: f"#{i+1}: {input_citations[i][:60]}..." if i < len(input_citations) else f"#{i+1}"
+            for i, r in enumerate(results)
+        }
+        sel = st.selectbox(
+            "Select a citation result to inspect:",
+            options=list(options.keys()),
+            format_func=lambda k: options[k],
+        )
+        if st.button("Show details"):
+            st.session_state["batch_selected"] = sel
+            st.rerun()
+        st.page_link("app.py", label="\u2190 Back to validator")
+        st.stop()
+
+    result = results[selected]
+
+st.page_link("app.py", label="\u2190 Back to validator")
+
 matches = result.get("top_matches", [])
+
+if result.get("timed_out"):
+    st.warning("This citation timed out during batch processing. No detailed results available.")
+    st.stop()
 
 if not matches:
     st.warning("No matching candidates were found.")
-    st.page_link("app.py", label="← Back to validator")
     st.stop()
 
 parsed_label = result.get("label", "")
@@ -48,7 +83,7 @@ st.divider()
 st.subheader("Metadata Comparison")
 
 top = matches[0]
-input_text = st.session_state.get("input_citation", "")
+input_text = st.session_state.get("input_citation", st.session_state.get("input_citations", [None])[selected] if has_batch and selected is not None else "")
 
 meta_fields = [
     ("Title", "title"),
@@ -57,12 +92,13 @@ meta_fields = [
     ("Venue", "venue"),
 ]
 
-# We don't have parsed fields directly, so show input vs top DB record
 st.markdown(f"**Input citation:** `{input_text}`")
 st.markdown("**Closest match in database:**")
 
+
 def _v(val):
-    return str(val) if val is not None else "—"
+    return str(val) if val is not None else "\u2014"
+
 
 st.markdown(
     f"""
@@ -97,5 +133,3 @@ score_df = pd.DataFrame(
     ]
 )
 st.dataframe(score_df, use_container_width=True, hide_index=True)
-
-st.page_link("app.py", label="← Back to validator")

@@ -46,11 +46,27 @@ def build_faiss_index(db_path: str, index_path: str):
         json.dump(mapping, f)
 
 
-def semantic_search(query_title: str, index_path: str, k: int = 10) -> list[dict]:
-    index = faiss.read_index(index_path)
+_index_cache = None
+_mapping_cache = None
 
-    with open(index_path + ".mapping.json", "r") as f:
-        mapping = {int(k): v for k, v in json.load(f).items()}
+
+def _load_index(index_path: str):
+    global _index_cache, _mapping_cache
+    if _index_cache is None:
+        _index_cache = faiss.read_index(index_path)
+        with open(index_path + ".mapping.json", "r") as f:
+            _mapping_cache = {int(k): v for k, v in json.load(f).items()}
+    return _index_cache, _mapping_cache
+
+
+def clear_index_cache():
+    global _index_cache, _mapping_cache
+    _index_cache = None
+    _mapping_cache = None
+
+
+def semantic_search(query_title: str, index_path: str, k: int = 10) -> list[dict]:
+    index, mapping = _load_index(index_path)
 
     model = _get_model()
     query_vec = model.encode([query_title])

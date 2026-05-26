@@ -1,4 +1,8 @@
+import asyncio
+import concurrent.futures
 import sqlite3
+import threading
+import time
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -22,6 +26,24 @@ def startup():
 
 class ValidateRequest(BaseModel):
     citation: str
+
+
+class BatchValidateRequest(BaseModel):
+    citations: list[str]
+
+
+_s2_lock = threading.Lock()
+_s2_last_call = 0.0
+
+
+def _acquire_s2_slot():
+    global _s2_last_call
+    with _s2_lock:
+        now = time.monotonic()
+        wait = max(0, config.S2_RATE_LIMIT - (now - _s2_last_call))
+        if wait > 0:
+            time.sleep(wait)
+        _s2_last_call = time.monotonic()
 
 
 def _exact_db_lookup(normalized_title: str, db_path: str) -> list[dict]:
@@ -58,9 +80,8 @@ def _try_semantic(query: str, index_path: str) -> list[dict]:
         return []
 
 
-@app.post("/validate")
-def validate(req: ValidateRequest) -> dict:
-    raw = req.citation.strip()
+def _verify_single(raw_citation: str, *, batch_mode: bool = False) -> dict:
+    raw = raw_citation.strip()
     if not raw:
         return {
             "label": "HALLUCINATED",
@@ -102,6 +123,8 @@ def validate(req: ValidateRequest) -> dict:
                 source = "llm_deepseek"
 
     if config.USE_LIVE_LOOKUP and result.get("label") == "HALLUCINATED":
+        if batch_mode:
+            _acquire_s2_slot()
         live_result = live_lookup_verify(parsed)
         if live_result:
             result = live_result
@@ -123,6 +146,61 @@ def validate(req: ValidateRequest) -> dict:
             "live_match": result.get("live_match"),
         }.items() if v is not None
     }
+
+
+@app.post("/validate")
+def validate(req: ValidateRequest) -> dict:
+    return _verify_single(req.citation, batch_mode=False)
+
+
+@app.post("/validate_batch")
+async def validate_batch(req: BatchValidateRequest) -> dict:
+    citations = [c.strip() for c in req.citations if c.strip()]
+    if not citations:
+        return {"results": []}
+    if len(citations) > config.MAX_BATCH_SIZE:
+        return {"error": f"Max {config.MAX_BATCH_SIZE} citations per batch"}
+
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(citations)) as pool:
+        futures = [
+            loop.run_in_executor(pool, _verify_single, c, True)
+            for c in citations
+        ]
+        done_set, _ = await asyncio.wait(futures, timeout=config.BATCH_TIMEOUT)
+
+    results = []
+    for i, fut in enumerate(futures):
+        if fut in done_set:
+            try:
+                r = fut.result()
+                r.update({"index": i, "timed_out": False})
+            except Exception as e:
+                r = {
+                    "index": i,
+                    "label": "ERROR",
+                    "confidence": 0.0,
+                    "source": "",
+                    "top_matches": [],
+                    "reason": str(e),
+                    "live_match": None,
+                    "timed_out": False,
+                }
+        else:
+            fut.cancel()
+            r = {
+                "index": i,
+                "label": "TIMEOUT",
+                "confidence": 0.0,
+                "source": "",
+                "top_matches": [],
+                "reason": "Batch processing time exceeded",
+                "live_match": None,
+                "timed_out": True,
+            }
+        results.append(r)
+
+    return {"results": sorted(results, key=lambda r: r["index"])}
 
 
 @app.get("/health")
