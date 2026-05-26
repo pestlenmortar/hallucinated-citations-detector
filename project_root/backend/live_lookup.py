@@ -14,7 +14,7 @@ TIMEOUT = 15
 
 def _search_papers(query: str, limit: int = 5) -> list[dict] | None:
     api_key = config.SEMANTIC_SCHOLAR_API_KEY
-    url = "{}?query={}&limit={}&fields=title,authors,year,externalIds,venue,publicationVenue".format(
+    url = "{}?query={}&limit={}&fields=title,authors,year,externalIds,venue,publicationVenue,abstract".format(
         SEARCH_URL, urllib.parse.quote(query), limit
     )
     req = Request(url)
@@ -141,6 +141,7 @@ def live_lookup_verify(parsed: dict) -> dict | None:
 
         ext_ids = paper.get("externalIds") or {}
         api_doi = ext_ids.get("DOI", "") or ""
+        abstract = paper.get("abstract") or ""
 
         title_sim = _token_overlap(query.lower(), title.lower())
         author_sim = _token_overlap(p_authors.lower(), authors.lower()) if p_authors else 0.0
@@ -164,6 +165,7 @@ def live_lookup_verify(parsed: dict) -> dict | None:
                 "year": year,
                 "venue": venue,
                 "doi": api_doi,
+                "abstract": abstract,
             }
 
     if best_score >= VALID_THRESHOLD:

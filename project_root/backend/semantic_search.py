@@ -21,19 +21,27 @@ def load_model():
     _get_model()
 
 
+def _make_content(row):
+    title = row[1] or ""
+    abstract = row[2] or ""
+    if abstract:
+        return title + ". " + abstract
+    return title
+
+
 def build_faiss_index(db_path: str, index_path: str):
     conn = sqlite3.connect(db_path)
     cursor = conn.execute(
-        "SELECT paper_id, title FROM papers WHERE title IS NOT NULL"
+        "SELECT paper_id, title, abstract FROM papers WHERE title IS NOT NULL"
     )
     rows = cursor.fetchall()
     conn.close()
 
     paper_ids = [row[0] for row in rows]
-    titles = [row[1] for row in rows]
+    contents = [_make_content(row) for row in rows]
 
     model = _get_model()
-    embeddings = model.encode(titles, show_progress_bar=True)
+    embeddings = model.encode(contents, show_progress_bar=True)
     embeddings = np.array(embeddings).astype("float32")
 
     dimension = embeddings.shape[1]
@@ -46,7 +54,7 @@ def build_faiss_index(db_path: str, index_path: str):
         json.dump(mapping, f)
 
 
-def semantic_search(query_title: str, index_path: str, k: int = 10) -> list[dict]:
+def semantic_search(query_title: str, index_path: str, k: int = 30) -> list[dict]:
     index = faiss.read_index(index_path)
 
     with open(index_path + ".mapping.json", "r") as f:

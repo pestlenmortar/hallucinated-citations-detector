@@ -74,7 +74,19 @@ def validate(req: ValidateRequest) -> dict:
 
     exact = _exact_db_lookup(normed, config.DB_PATH)
     fuzzy = _try_fuzzy(parsed.get("title") or normed, config.DB_PATH)
-    sem = _try_semantic(parsed.get("title") or normed, config.FAISS_INDEX_PATH)
+
+    live_semantic_query = None
+    live_lookup_cache = None
+    if config.USE_LIVE_LOOKUP:
+        live_result = live_lookup_verify(parsed)
+        if live_result:
+            live_lookup_cache = live_result
+            abstract = (live_result.get("live_match") or {}).get("abstract") or ""
+            if len(abstract) > len(parsed.get("title") or ""):
+                live_semantic_query = abstract
+
+    semantic_query = live_semantic_query or (parsed.get("title") or normed)
+    sem = _try_semantic(semantic_query, config.FAISS_INDEX_PATH)
 
     all_fuzzy = exact + fuzzy
     fused = fuse_candidates(all_fuzzy, sem, parsed, config.DB_PATH)
@@ -102,10 +114,14 @@ def validate(req: ValidateRequest) -> dict:
                 source = "llm_deepseek"
 
     if config.USE_LIVE_LOOKUP and result.get("label") == "HALLUCINATED":
-        live_result = live_lookup_verify(parsed)
-        if live_result:
-            result = live_result
+        if live_lookup_cache:
+            result = live_lookup_cache
             source = result.get("source", "live_lookup")
+        else:
+            live_result = live_lookup_verify(parsed)
+            if live_result:
+                result = live_result
+                source = result.get("source", "live_lookup")
 
     if config.USE_LLM and result.get("label") == "HALLUCINATED":
         llm_result = llm_verify_direct(parsed)
