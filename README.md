@@ -1,94 +1,112 @@
-# Citation Validator
+# Citation Validator — Multi-Citation Branch
 
-A full-stack academic citation verification system that parses raw citation strings (APA/IEEE), searches a local database using fuzzy and semantic matching, fuses candidates with weighted scoring, and returns a verdict (VALID / PARTIALLY_VALID / HALLUCINATED) via heuristic or LLM-based verification.
+This branch (`multi_citation`) extends the single-citation pipeline with batch processing, concurrent verification, in-memory caching, and Semantic Scholar rate-limit enforcement. It maintains full backward compatibility with the single-citation workflow on `master`.
 
-## Architecture
+---
+
+## Branching: `master` vs `multi_citation`
+
+| Aspect | `master` | `multi_citation` |
+|---|---|---|
+| Citations per request | 1 | 1 **or** many (up to 50) |
+| Endpoint | `POST /validate` | `POST /validate` + **`POST /validate_batch`** |
+| Processing model | Synchronous, single-threaded | Async + `ThreadPoolExecutor` (parallel) |
+| FAISS index | Read from disk on every call | Cached in memory after first load |
+| Fuzzy title list | Full DB scan on every call | Cached in memory after first load |
+| S2 rate limiting | None | 1 req/s enforced via `threading.Lock` |
+| Total timeout | None (Streamlit has 15s client timeout) | 14s hard cap; timed-out citations return `"TIMEOUT"` |
+
+### How to switch between branches locally
+
+```bash
+# Switch to single-citation (master)
+git checkout master
+
+# Switch to multi-citation (this branch)
+git checkout multi_citation
+```
+
+The `project_root/` contents are identical between branches. The differences are only in the code — `master` has the original sync pipeline, `multi_citation` adds batch + caching on top. Both run the same way:
 
 ```
-User Browser (Streamlit frontend)
+uvicorn backend.api:app --port 8000          # backend (same command)
+streamlit run frontend/app.py                 # frontend (same command)
+```
+
+---
+
+## Architecture Differences
+
+### `master` (single-citation)
+
+```
+User input (1 citation)
     |
-    | POST /validate {"citation": "..."}
     v
-FastAPI Backend
-    |
-    |-- parser.py        -> models.py (ParsedCitation)
-    |-- normalization.py -> normalize_title()
-    |-- fuzzy_search.py  -> RapidFuzz + SQLite
-    |-- semantic_search.py -> Sentence-Transformers + FAISS
-    |-- fusion.py        -> weighted scoring of candidates
-    |-- verifier.py      -> heuristic and/or LLM verification
-    |                       (DeepSeek Chat API)
+Streamlit  -->  POST /validate  -->  FastAPI (sync def)
+    |                                      |
+    |                              1. Parse citation
+    |                              2. Fuzzy search (reads DB every call)
+    |                              3. Semantic search (reads FAISS index every call)
+    |                              4. Fuse + heuristic verify
+    |                              5. [LLM verify]
+    |                              6. [Live lookup - no rate limit]
+    |                              7. Return single result
+    v
+Display single result card
+```
+
+### `multi_citation` (this branch)
+
+```
+User input (1+ citations, one per line)
     |
     v
-SQLite (papers.db) <-- ingest_openalex.py (OpenAlex API)
+Streamlit  -->  POST /validate_batch  -->  FastAPI (async def)
+    |                                              |
+    |                                      ThreadPoolExecutor
+    |                                      +-- Thread 1: _verify_single(c1, batch_mode=True)
+    |                                      |     |-- Fuzzy search (cached title list)
+    |                                      |     |-- Semantic search (cached FAISS index)
+    |                                      |     |-- [LLM verify - parallel]
+    |                                      |     |-- [Live lookup - serialized at 1 req/s]
+    |                                      |     `-- return result
+    |                                      +-- Thread 2: _verify_single(c2, ...)
+    |                                      +-- ...
+    |                                      |
+    |                                      asyncio.wait(futures, timeout=14s)
+    |                                      cancel timed-out futures
+    |                                      return {results: [...]}
+    |
+    v
+Display: single result card OR summary table
 ```
 
-## Project Structure
+### Key New Components
 
-```
-project_root/
-├── backend/
-│   ├── api.py              # FastAPI entry point
-│   ├── config.py           # .env configuration loader
-│   ├── fusion.py           # Candidate fusion and scoring
-│   ├── fuzzy_search.py     # RapidFuzz-based fuzzy matching
-│   ├── models.py           # Pydantic data models
-│   ├── normalization.py    # Text normalization utilities
-│   ├── parser.py           # Citation string parser (APA/IEEE)
-│   ├── retrieval.py        # (stub) retrieval orchestration
-│   ├── scoring.py          # (stub) scoring algorithms
-│   ├── semantic_search.py  # FAISS + Sentence-Transformers search
-│   ├── utils.py            # (stub) shared utilities
-│   └── verifier.py         # Heuristic and LLM verifier
-├── database/
-│   ├── schema.sql          # SQLite table DDL
-│   ├── ingest_openalex.py  # OpenAlex API data ingestion
-│   └── ingest_semanticscholar.py  # (stub) Semantic Scholar ingestion
-├── embeddings/
-│   └── build_index.py      # (stub) vector index builder
-├── frontend/
-│   ├── app.py              # Streamlit main page
-│   ├── pages/
-│   │   ├── analytics.py    # (stub) analytics page
-│   │   └── results.py      # Detailed results page
-│   └── styles/
-│       └── minimal.css     # Custom Streamlit styles
-├── llm/
-│   ├── inference.py        # (stub) LLM inference wrapper
-│   ├── json_schema.py      # Pydantic schema for LLM output
-│   └── prompts/
-│       └── verification_prompt.txt  # LLM verification prompt
-├── tests/
-│   ├── test_fusion.py      # Fusion module tests
-│   ├── test_parser.py      # Citation parser tests
-│   ├── test_retrieval.py   # (stub) retrieval tests
-│   └── test_verifier.py    # Verifier module tests
-├── .env                    # Environment configuration
-├── docker-compose.yml      # (stub) Docker orchestration
-├── papers.db               # SQLite database
-└── requirements.txt        # Python dependencies
-```
+| Component | Location | Purpose |
+|---|---|---|
+| `_verify_single()` | `backend/api.py:83` | Extracted common verification logic used by both `/validate` and `/validate_batch` |
+| `_acquire_s2_slot()` | `backend/api.py:39` | `threading.Lock`-based rate limiter ensuring ≤1 Semantic Scholar call/second |
+| `_index_cache`, `_mapping_cache` | `backend/semantic_search.py` | FAISS index loaded once in memory, reused across all threads |
+| `_title_cache` | `backend/fuzzy_search.py` | Full normalized-title list loaded once from DB, reused across all threads |
+| `BatchValidateRequest` | `backend/api.py:31` | Pydantic model accepting `citations: list[str]` |
+| `clear_index_cache()` | `backend/semantic_search.py` | Call after rebuilding FAISS index to force re-load |
+| `clear_title_cache()` | `backend/fuzzy_search.py` | Call after re-ingesting DB to force re-load |
 
-## Requirements
+---
 
-### Python Dependencies
+## New Config Variables
 
-- fastapi
-- uvicorn
-- pydantic
-- python-dotenv
-- rapidfuzz
-- faiss-cpu
-- sentence-transformers
-- numpy
-- streamlit
-- pandas
+| Variable | Default | Description |
+|---|---|---|
+| `BATCH_TIMEOUT` | `14` | Max seconds for a batch request (Streamlit's client timeout is 15s) |
+| `MAX_BATCH_SIZE` | `50` | Max citations per batch request |
+| `S2_RATE_LIMIT` | `1.0` | Min seconds between Semantic Scholar API calls |
 
-### External Services
+---
 
-- **DeepSeek API** (optional) -- required only if LLM-based verification is enabled. Uses `deepseek-chat` model. Set `DEEPSEEK_API_KEY` in `.env`.
-
-## Setup and Usage
+## Running the Pipeline
 
 ### 1. Install Dependencies
 
@@ -96,75 +114,135 @@ project_root/
 pip install fastapi uvicorn pydantic python-dotenv rapidfuzz faiss-cpu sentence-transformers numpy streamlit pandas
 ```
 
-### 2. (Optional) Download SentenceTransformer Model
-
-The SentenceTransformer model (`all-MiniLM-L6-v2`) is downloaded automatically on first use by the backend. You can also pre-download it manually:
-
-```bash
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
-```
-
-### 3. Ingest Paper Data
-
-Fetch papers from OpenAlex by keyword:
+### 2. Ingest Paper Data
 
 ```bash
 cd project_root/database
 python ingest_openalex.py "machine learning"
 ```
 
-This populates `papers.db` with paper metadata from the OpenAlex API.
-
-### 4. Build FAISS Vector Index
+### 3. Build FAISS Vector Index
 
 ```bash
 cd project_root
 python -c "from backend.semantic_search import build_faiss_index; build_faiss_index('papers.db', 'faiss_index.bin')"
 ```
 
-### 5. Configure Environment
+### 4. Configure Environment
 
-Create or edit `project_root/.env`:
+Edit `project_root/.env`:
 
 ```
 DB_PATH=papers.db
 FAISS_INDEX_PATH=faiss_index.bin
-USE_LLM=false
-DEEPSEEK_API_KEY=your_api_key_here
+USE_LLM=true
+DEEPSEEK_API_KEY=sk-...
+USE_LIVE_LOOKUP=true
+SEMANTIC_SCHOLAR_API_KEY=s2k-...
+BATCH_TIMEOUT=14
+MAX_BATCH_SIZE=50
+S2_RATE_LIMIT=1.0
 ```
 
-Set `USE_LLM=true` and provide a valid `DEEPSEEK_API_KEY` to enable LLM-based verification via the DeepSeek API.
-
-### 6. Start the Backend
+### 5. Start Backend
 
 ```bash
 cd project_root
 uvicorn backend.api:app --reload --port 8000
 ```
 
-### 7. Start the Frontend
-
-In a separate terminal:
+### 6. Start Frontend
 
 ```bash
 cd project_root
 streamlit run frontend/app.py
 ```
 
-### 8. Use the Application
+Open `http://localhost:8501`.
 
-Open `http://localhost:8501` in your browser, paste a citation string (APA or IEEE format), and click **Validate**. The system will:
+---
 
-1. Parse the citation to extract metadata
-2. Search the database using exact, fuzzy, and semantic matching
-3. Fuse candidates into a ranked list with weighted scores
-4. Verify the top candidate and return a verdict
-5. Display the result with a color-coded card and top matches
+## API Endpoints
 
-**Verdict meanings:**
-- **VALID** -- citation matches a known paper with high confidence
-- **PARTIALLY_VALID** -- citation partially matches but has discrepancies
-- **HALLUCINATED** -- no matching paper found in the database
+### POST /validate (unchanged — single citation)
+
+```json
+// Request
+{"citation": "Smith, J. (2020). Machine learning. Journal of AI."}
+
+// Response
+{
+  "label": "HALLUCINATED",
+  "confidence": 0.9,
+  "source": "llm_deepseek",
+  "top_matches": [...],
+  "reason": "...",
+  "live_match": null
+}
+```
+
+### POST /validate_batch (new — multi citation)
+
+```json
+// Request
+{
+  "citations": [
+    "Smith, J. (2020). Machine learning. Journal of AI.",
+    "Doe, A. (2019). Deep learning. NeurIPS."
+  ]
+}
+
+// Response
+{
+  "results": [
+    {
+      "index": 0,
+      "label": "HALLUCINATED",
+      "confidence": 0.9,
+      "source": "llm_deepseek",
+      "top_matches": [...],
+      "reason": "...",
+      "live_match": null,
+      "timed_out": false
+    },
+    {
+      "index": 1,
+      "label": "PARTIALLY_VALID",
+      "confidence": 0.72,
+      "source": "db_heuristic",
+      "top_matches": [...],
+      "reason": "...",
+      "live_match": null,
+      "timed_out": false
+    }
+  ]
+}
+```
+
+Citations that exceed the 14s batch timeout return `"label": "TIMEOUT"` with `"timed_out": true`.
+
+### GET /health
+
+```json
+{"status": "ok"}
+```
+
+---
+
+## Cache Management
+
+After re-ingesting the database or rebuilding the FAISS index, call the cache-clearing functions from the Python shell:
+
+```python
+from backend.semantic_search import clear_index_cache
+from backend.fuzzy_search import clear_title_cache
+clear_index_cache()
+clear_title_cache()
+```
+
+Or simply restart the server — caches are re-loaded lazily on the first request.
+
+---
 
 ## Running Tests
 
@@ -172,28 +250,3 @@ Open `http://localhost:8501` in your browser, paste a citation string (APA or IE
 cd project_root
 python -m pytest tests/ -v
 ```
-
-## API Endpoints
-
-### POST /validate
-
-Request body:
-```json
-{
-  "citation": "Smith, J., & Doe, A. (2020). Machine learning is great. Journal of AI, 15(3), 123-145."
-}
-```
-
-Response:
-```json
-{
-  "label": "VALID",
-  "confidence": 0.95,
-  "reason": "High match confidence",
-  "top_matches": [...]
-}
-```
-
-### GET /health
-
-Returns `{"status": "ok"}`.
