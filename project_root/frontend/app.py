@@ -121,6 +121,7 @@ if "batch_result" in st.session_state:
 
     else:
         st.subheader(f"Results ({len(results)} citations)")
+        st.page_link("pages/results.py", label="View full detailed results \u2192")
 
         for i, r in enumerate(results):
             label = r.get("label", "")
@@ -164,3 +165,23 @@ if "batch_result" in st.session_state:
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+            with st.expander(f"Details for #{i+1}"):
+                live = r.get("live_match")
+                if live:
+                    st.markdown("**Live Match (Semantic Scholar)**")
+                    st.markdown(
+                        f"**{live.get('title', '')}** ({live.get('year', '')})  \n"
+                        f"{live.get('authors', '')}  \n"
+                        f"*{live.get('venue', '')}*"
+                    )
+                matches = r.get("top_matches", [])
+                if matches:
+                    st.markdown("**Top DB Matches**")
+                    for j, m in enumerate(matches[:3], 1):
+                        st.markdown(
+                            f"{j}. **{m.get('title', '')}** ({m.get('year', '')})  "
+                            f"— fuzzy: {m.get('fuzzy_score', 0):.0f} "
+                            f"semantic: {m.get('semantic_score', 0):.2f} "
+                            f"final: {m.get('final_score', 0):.2f}"
+                        )
