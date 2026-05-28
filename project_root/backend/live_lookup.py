@@ -87,23 +87,14 @@ def _doi_similarity(api_doi: str | None, parsed_doi: str) -> float:
     if p in a or a in p:
         return 0.8
     return 0.0
-    if not api_doi or not parsed_doi:
-        return 0.0
-    a = api_doi.lower().strip()
-    p = parsed_doi.lower().strip()
-    if a == p:
-        return 1.0
-    if p in a or a in p:
-        return 0.8
-    return 0.0
 
 
-TITLE_W = 0.10
-AUTHOR_W = 0.30
-YEAR_W = 0.30
-VENUE_W = 0.20
-DOI_W = 0.05
-SEMANTIC_W = 0.05
+TITLE_W = 0.18
+AUTHOR_W = 0.21
+YEAR_W = 0.11
+VENUE_W = 0.05
+DOI_W = 0.10
+SEMANTIC_W = 0.35
 API_SCORE_CAP_VALID = 0.90
 API_SCORE_CAP_PARTIAL = 0.70
 VALID_THRESHOLD = 0.45
