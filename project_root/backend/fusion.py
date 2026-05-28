@@ -11,12 +11,12 @@ VENUE_STOPWORDS = frozenset({
     "do", "did", "each", "any", "also", "than", "then",
 })
 
-RANK_TITLE_W = 0.20
-RANK_AUTHOR_W = 0.23
-RANK_YEAR_W = 0.12
+RANK_TITLE_W = 0.18
+RANK_AUTHOR_W = 0.21
+RANK_YEAR_W = 0.11
 RANK_VENUE_W = 0.05
-RANK_DOI_W = 0.02
-RANK_SEMANTIC_W = 0.38
+RANK_DOI_W = 0.10
+RANK_SEMANTIC_W = 0.35
 
 
 def _token_overlap(a: str, b: str) -> float:

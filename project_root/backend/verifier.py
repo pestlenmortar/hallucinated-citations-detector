@@ -17,12 +17,12 @@ PROMPT_PATH = os.path.join(
 )
 
 
-TITLE_W = 0.10
-AUTHOR_W = 0.25
-YEAR_W = 0.25
-VENUE_W = 0.20
-DOI_W = 0.05
-SEMANTIC_W = 0.15
+TITLE_W = 0.18
+AUTHOR_W = 0.21
+YEAR_W = 0.11
+VENUE_W = 0.05
+DOI_W = 0.10
+SEMANTIC_W = 0.35
 
 
 def _component_score(candidate: dict) -> float:
@@ -52,9 +52,9 @@ def _metadata_present(candidate: dict, field: str) -> bool:
 
 def _detect_metadata_issues(candidate: dict) -> list[str]:
     issues = []
-    if _metadata_present(candidate, "year") and candidate.get("year_similarity", 0.0) < 0.5:
+    if _metadata_present(candidate, "year") and candidate.get("year_similarity", 0.0) < 0.3:
         issues.append("year differs")
-    if _metadata_present(candidate, "venue") and candidate.get("venue_similarity", 0.0) < 0.3:
+    if _metadata_present(candidate, "venue") and candidate.get("venue_similarity", 0.0) == 0.0:
         issues.append("venue differs")
     if _metadata_present(candidate, "doi") and candidate.get("doi_similarity", 0.0) < 0.8:
         issues.append("DOI mismatch")
@@ -96,8 +96,8 @@ def heuristic_verify(top_candidate: dict) -> dict:
             "reason": "Title matches exactly but authors, year, or venue do not match database record",
         }
 
-    if title_sim >= 0.70 or final_score >= 50:
-        if author_sim >= 0.1 or year_sim >= 0.5:
+    if title_sim >= 0.85 or final_score >= 50:
+        if author_sim >= 0.3 and year_sim >= 0.5:
             return {
                 "label": "PARTIALLY_VALID",
                 "confidence": round(score, 4),
