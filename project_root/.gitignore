@@ -12,6 +12,9 @@ __pycache__/
 faiss_index.bin
 faiss_index.bin.mapping.json
 
+# Jupyter notebooks (non-essential analysis)
+*.ipynb
+
 # Logs
 *.log
 
