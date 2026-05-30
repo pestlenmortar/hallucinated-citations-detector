@@ -3,6 +3,8 @@ import re
 
 from rapidfuzz import fuzz
 
+from .parser import ieee_author_overlap
+
 VENUE_STOPWORDS = frozenset({
     "in", "on", "of", "the", "and", "for", "a", "an", "to", "with",
     "at", "by", "is", "was", "are", "its", "their", "this", "that",
@@ -12,11 +14,11 @@ VENUE_STOPWORDS = frozenset({
 })
 
 RANK_TITLE_W = 0.18
-RANK_AUTHOR_W = 0.21
+RANK_AUTHOR_W = 0.25
 RANK_YEAR_W = 0.11
 RANK_VENUE_W = 0.05
 RANK_DOI_W = 0.10
-RANK_SEMANTIC_W = 0.35
+RANK_SEMANTIC_W = 0.31
 
 
 def _token_overlap(a: str, b: str) -> float:
@@ -121,7 +123,10 @@ def fuse_candidates(
 
         title_sim = fuzzy_score / 100.0
         sem_sim = 1.0 / (1.0 + semantic_score) if semantic_entry is not None else 0.0
-        author_sim = _token_overlap(p_authors, db_authors)
+        author_sim = max(
+            _token_overlap(p_authors, db_authors),
+            ieee_author_overlap(p_authors, db_authors),
+        )
         year_sim = _year_similarity(db_year, p_year)
         venue_sim = _venue_similarity(p_venue, db_venue)
         doi_sim = _doi_similarity(db_doi, p_doi)

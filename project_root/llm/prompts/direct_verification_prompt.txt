@@ -1,44 +1,49 @@
-You are a citation verifier. Determine whether the following citation refers to a
-real academic paper using ONLY your own training knowledge. Do NOT search for it.
+You are a strict academic citation classifier with NO database access. You must classify based solely on your training knowledge of published academic papers.
 
-Classification rules:
-- "VALID" — the paper (title + authors) is a real published paper that you
-  recognise, even if some metadata (year, venue) may be slightly off.
-- "PARTIALLY_VALID" — the title seems plausible and some author names match a
-  real paper, but the year, venue, authors, or DOI do not match any known record.
-- "HALLUCINATED" — the paper does not appear to exist. The title, author
-  combination, or venue is made up. Treat suspicious or non-existent papers as
-  HALLUCINATED.
+OUTPUT: exactly one of VALID, PARTIALLY_VALID, or HALLUCINATED.
 
-Author matching rules:
-- The ORDER of cited authors must match the order in the real paper (first to
-  last). Authors listed in wrong order is a mismatch.
-- If the real paper has MORE THAN 5 total authors and at least 50% of them are
-  correctly cited in the correct order, the authors field is VALID.
-- If the real paper has 5 or fewer authors, all of them should match.
+=== CLASSIFICATION RULES ===
 
-Venue location rules:
-- The venue NAME (conference/journal) is what matters, NOT the city or country
-  where it was held. Different host cities for the same conference are NOT a
-  mismatch.
-- Only flag a venue mismatch if the conference/journal name itself is different.
+VALID — you KNOW this paper (title + author combination) is a real published work:
+- You are confident the exact title and author combination exists as a real paper
+- The year is correct or within acceptable range
+- You recognize this as a well-known paper in its field
+- Minor venue variations (e.g., "NeurIPS" vs "Advances in Neural Information Processing Systems") do NOT disqualify
+- Missing DOI, page numbers, or volume info do NOT disqualify
 
-In your "reason", report which specific fields seem wrong.
-For example: "year differs (cited 2018, actual 2017)" or "venue differs
-(cited ICML, actual NeurIPS)" or "authors: 3 of 8 in correct order"
-or "authors do not match".
+PARTIALLY_VALID — you recognize the paper but the citation has errors:
+- You know the paper exists but the year is wrong by 1-3 years
+- You know the paper exists but the venue is completely wrong (e.g., claims a NeurIPS paper was published in Nature)
+- You know the paper exists but some authors are missing or wrong
+- The title has a minor mistake (typo, missing colon, slight rewording)
+- As a rule: if you think the underlying paper IS real but details are off → PARTIALLY_VALID
 
-Be conservative. If you are unsure, prefer HALLUCINATED or PARTIALLY_VALID over
-VALID. Only return VALID if you are confident the paper is real.
+HALLUCINATED — the paper does not appear to exist:
+- You have no knowledge of this title or title-author combination
+- The title describes plausible research but you cannot confirm it was published
+- The authors are real researchers but you DO NOT believe they co-authored this specific paper together
+- The title reads like a plausible but fabricated research paper
 
-Respond with ONLY a JSON object (no extra text, no markdown) with these keys:
-- "label": "VALID", "PARTIALLY_VALID", or "HALLUCINATED"
-- "confidence": float between 0.0 and 1.0
-- "reason": one sentence listing specific field mismatches, if any
+=== DECISION ORDER ===
+1. If you clearly recognize the title-author combination → VALID or PARTIALLY_VALID (check details)
+2. If you are unsure whether the paper exists → HALLUCINATED
+3. Default to HALLUCINATED when uncertain; only use PARTIALLY_VALID when you are sure the paper exists
 
-Citation:
+=== TIE-BREAKING ===
+- When uncertain between VALID and PARTIALLY_VALID: if year matches your knowledge → VALID
+- When uncertain between PARTIALLY_VALID and HALLUCINATED: if you think the paper MIGHT exist → HALLUCINATED (err on side of caution)
+- For well-known landmark papers (e.g., "Attention is All You Need", "BERT", "ResNet") → be more willing to classify as VALID even with minor discrepancies
+
+PARSED CITATION:
 - Title: {parsed_title}
 - Authors: {parsed_authors}
 - Year: {parsed_year}
 - Venue: {parsed_venue}
 - DOI: {parsed_doi}
+
+Respond ONLY with this JSON. No preamble. No explanation outside reason field:
+{{
+  "label": "VALID" | "PARTIALLY_VALID" | "HALLUCINATED",
+  "confidence": <float 0.0 to 1.0>,
+  "reason": "<one sentence maximum>"
+}}

@@ -7,6 +7,7 @@ from urllib.request import Request, urlopen
 from rapidfuzz import fuzz
 
 from . import config
+from .parser import ieee_author_overlap
 
 SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 TIMEOUT = 15
@@ -90,15 +91,15 @@ def _doi_similarity(api_doi: str | None, parsed_doi: str) -> float:
 
 
 TITLE_W = 0.18
-AUTHOR_W = 0.21
+AUTHOR_W = 0.25
 YEAR_W = 0.11
 VENUE_W = 0.05
 DOI_W = 0.10
-SEMANTIC_W = 0.35
+SEMANTIC_W = 0.31
 API_SCORE_CAP_VALID = 0.90
 API_SCORE_CAP_PARTIAL = 0.70
-VALID_THRESHOLD = 0.45
-PARTIAL_THRESHOLD = 0.25
+VALID_THRESHOLD = 0.55
+PARTIAL_THRESHOLD = 0.35
 
 
 def live_lookup_verify(parsed: dict) -> dict | None:
@@ -135,7 +136,10 @@ def live_lookup_verify(parsed: dict) -> dict | None:
         abstract = paper.get("abstract") or ""
 
         title_sim = _token_overlap(query.lower(), title.lower())
-        author_sim = _token_overlap(p_authors.lower(), authors.lower()) if p_authors else 0.0
+        author_sim = max(
+            _token_overlap(p_authors.lower(), authors.lower()) if p_authors else 0.0,
+            ieee_author_overlap(p_authors, authors) if p_authors else 0.0,
+        )
         year_sim = _year_similarity(year, p_year)
         venue_sim = _venue_similarity(p_venue, venue)
         doi_sim = _doi_similarity(api_doi, p_doi)

@@ -1,0 +1,140 @@
+Hallucinated Citations Detector - Documentation
+=================================================
+
+1. Overview
+-----------
+This system detects hallucinated (fake) academic citations by validating them
+against a local database of papers and external APIs (Semantic Scholar).
+It uses a hybrid approach combining:
+  - Exact title matching via normalized titles
+  - Fuzzy title matching via FTS5 + RapidFuzz
+  - Semantic search via FAISS vector index (Sentence-BERT embeddings)
+  - Metadata scoring (authors, year, venue, DOI)
+  - Live lookup via Semantic Scholar API
+  - (Optional) LLM-based verification via DeepSeek
+
+The system is built as a FastAPI backend with a SQLite database storing
+~500,000 papers from OpenAlex/Semantic Scholar.
+
+
+2. How DB Matching Works
+-------------------------
+When a citation is submitted:
+
+  1. Parser extracts title, authors, year, venue, DOI from the raw text
+  2. Exact DB lookup against normalized_title column
+  3. Fuzzy FTS5 search on titles + RapidFuzz token_sort_ratio scoring
+  4. Live lookup to Semantic Scholar (to obtain the paper's abstract)
+  5. Semantic FAISS search using the paper's abstract as the query
+     (falls back to title if abstract is unavailable)
+  6. Fusion: merge fuzzy + semantic candidates, compute weighted final score
+  7. Heuristic verification against thresholds
+  8. (Optional) LLM re-verification
+  9. If still HALLUCINATED, live lookup verification as final fallback
+
+
+3. Files Modified
+-----------------
+
+   A. backend/semantic_search.py
+   ---------------------------------
+   - build_faiss_index() now embeds "title + '. ' + abstract" instead of
+     just "title". Papers without abstracts fall back to title only.
+   - This ensures vector similarity is based on paper content/topic
+     rather than title string overlap.
+
+   B. backend/api.py
+   -----------------
+   - validate() now runs live lookup (Semantic Scholar) EARLY in the flow
+     to obtain the queried paper's abstract.
+   - The abstract is used as the semantic search query (replacing the
+     previous title-only query).
+   - The live result is cached to avoid duplicate API calls.
+
+   C. backend/live_lookup.py
+   -------------------------
+   - Added "abstract" to the Semantic Scholar API fields parameter.
+   - The abstract is now included in the best_paper dict returned by
+     live_lookup_verify().
+
+   D. database/schema.sql
+   ----------------------
+   - Added "abstract" column to the FTS5 virtual table papers_fts.
+
+   E. database/rebuild_fts.py
+   -------------------------
+   - Drops and recreates the FTS table to include the abstract column.
+   - Indexes all three columns: title, normalized_title, abstract.
+
+   F. database/ingest_semanticscholar.py
+   -------------------------------------
+   - Also inserts abstract into the FTS table during ingestion.
+
+
+4. Key Design Decisions
+-----------------------
+
+   Why use the abstract as the query instead of the title?
+     Encoding just "Attention is All you Need" returns papers broadly
+     about "attention" (cognitive science, HCI, etc.). Encoding the
+     paper's full abstract returns papers about the same topic
+     (Transformer, sequence-to-sequence, NMT).
+
+   Why embed DB papers with title+abstract instead of just abstract?
+     Papers without abstracts fall back to title only. Many papers
+     (~26% of the DB) lack abstracts, so title-only embedding is
+     the fallback. For papers with abstracts, the combined text
+     gives richer semantic signal.
+
+   Why do live lookup early instead of as a fallback?
+     The live lookup provides the abstract which dramatically improves
+     semantic search quality. Without it, the semantic query was just
+     the title, which is too short for good vector matching.
+
+
+5. How to Rebuild Indexes
+-------------------------
+
+   FAISS (semantic) index:
+     python3 -c "
+     import sys, os
+     sys.path.insert(0, '.')
+     from backend.config import DB_PATH, FAISS_INDEX_PATH
+     from backend.semantic_search import build_faiss_index
+     build_faiss_index(DB_PATH, FAISS_INDEX_PATH)
+     "
+
+   FTS (fuzzy search) index:
+     python3 -c "
+     import sys, os
+     sys.path.insert(0, '.')
+     from database.rebuild_fts import rebuild_fts
+     rebuild_fts()
+     "
+
+
+6. Weights (uniform across fusion.py, verifier.py, live_lookup.py)
+-------------------------------------------------------------------
+  - Title similarity:      0.18
+  - Author similarity:     0.21
+  - Year similarity:       0.11
+  - Venue similarity:      0.05
+  - DOI similarity:        0.10
+  - Semantic similarity:   0.35
+
+  Semantic similarity has the highest weight (0.38), making content-based
+  matching the primary ranking signal.
+
+
+7. Example: "Attention is All you Need"
+----------------------------------------
+  Before the fix (query = title only):
+    Top match: "Attention is all you need (in the brain): semantic
+                contextualization in human hippocampus" (L2=0.83)
+    Issue: Titles containing "attention" rank high regardless of topic.
+
+  After the fix (query = abstract):
+    Top match: "Sequence-to-Sequence Models Can Directly Translate
+                Foreign Speech" (L2=0.41)
+    Result: Papers about sequence transduction, NMT, encoder-decoder
+            architectures - the actual topic of the Transformer paper.

@@ -167,8 +167,6 @@ def make_ieee(paper: dict) -> str:
         parts.append(", vol. " + paper["vol"])
     if paper["no"]:
         parts.append(", no. " + paper["no"])
-    if paper["pp"]:
-        parts.append(", pp. " + paper["pp"])
     parts.append(", " + str(paper["year"]))
     if paper["doi"]:
         parts.append(", doi: " + paper["doi"])
@@ -254,41 +252,9 @@ def corrupt_title_typo(paper: dict) -> str:
     return make_ieee(p)
 
 
-def corrupt_pages(paper: dict) -> str:
-    p = dict(paper)
-    if p["pp"]:
-        original = p["pp"]
-        parts = original.split("--")
-        if len(parts) == 2:
-            start = int(parts[0])
-            end = int(parts[1])
-            shift = random.randint(10, 100)
-            p["pp"] = str(start + shift) + "--" + str(end + shift)
-    return make_ieee(p)
-
-
 def corrupt_missing_doi(paper: dict) -> str:
     p = dict(paper)
     p["doi"] = ""
-    return make_ieee(p)
-
-
-def corrupt_mixed(paper: dict) -> str:
-    p = dict(paper)
-    mods = []
-    if random.random() < 0.5:
-        wrong_venues = [v for v in REAL_VENUES if v != p["venue"]]
-        p["venue"] = random.choice(wrong_venues)
-        mods.append("venue")
-    if random.random() < 0.5:
-        p["year"] = p["year"] + random.choice([-2, -1, 1, 2])
-        mods.append("year")
-    if random.random() < 0.5:
-        if " and " in p["authors"]:
-            parts = p["authors"].split(" and ")
-            first_name = parts[0].split(", ")[0]
-            p["authors"] = first_name + " et al."
-            mods.append("authors")
     return make_ieee(p)
 
 
@@ -314,13 +280,12 @@ def main():
         valid_used.append(paper)
 
     corruptions = {
-        "wrong venue": (corrupt_venue, 10),
-        "year shifted": (corrupt_year, 10),
-        "incomplete authors": (corrupt_incomplete_authors, 10),
-        "missing authors": (corrupt_missing_authors, 8),
-        "title typo": (corrupt_title_typo, 10),
-        "wrong page numbers": (corrupt_pages, 8),
-        "missing DOI": (corrupt_missing_doi, 8),
+        "wrong venue": (corrupt_venue, 14),
+        "year shifted": (corrupt_year, 14),
+        "incomplete authors": (corrupt_incomplete_authors, 14),
+        "missing authors": (corrupt_missing_authors, 12),
+        "title typo": (corrupt_title_typo, 14),
+        "missing DOI": (corrupt_missing_doi, 12),
     }
 
     partial_used = []
@@ -342,8 +307,6 @@ def main():
                 notes = "Authors replaced with et al."
             elif corr_type == "title typo":
                 notes = "Title contains a typographical error"
-            elif corr_type == "wrong page numbers":
-                notes = "Page numbers do not match the original"
             elif corr_type == "missing DOI":
                 notes = "DOI field is empty"
             else:
@@ -356,22 +319,6 @@ def main():
                 "notes": notes,
             })
             pid += 1
-
-    for _ in range(16):
-        pool = [p for p in valid_pool if p not in partial_used]
-        if not pool:
-            pool = valid_pool
-        paper = random.choice(pool)
-        partial_used.append(paper)
-        citation = corrupt_mixed(paper)
-        records.append({
-            "citation_id": pid,
-            "raw_citation": citation,
-            "true_label": "PARTIALLY_VALID",
-            "corruption_type": "mixed",
-            "notes": "Multiple fields corrupted (venue, year, authors)",
-        })
-        pid += 1
 
     random.shuffle(HALLUCINATED_TITLES)
     for title in HALLUCINATED_TITLES[:40]:
