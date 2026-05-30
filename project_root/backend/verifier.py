@@ -40,6 +40,9 @@ DIRECT_PROMPT_PATH = os.path.join(
 PROMPT_PATH = os.path.join(
     os.path.dirname(__file__), "..", "llm", "prompts", "verification_prompt.txt"
 )
+BINARY_GATE_PROMPT_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "llm", "prompts", "binary_gate_prompt.txt"
+)
 
 
 TITLE_W = 0.18
@@ -456,3 +459,49 @@ def llm_verify_direct(parsed_citation: dict) -> dict:
             "confidence": 0.0,
             "reason": "LLM verification failed -- no database or API match found",
         }
+
+
+def _load_binary_gate_template() -> str:
+    with open(BINARY_GATE_PROMPT_PATH, "r") as f:
+        return f.read()
+
+
+def llm_binary_gate(parsed_citation: dict) -> bool:
+    """Simple LLM binary gate: does this paper EXIST?
+    Returns True if LLM thinks paper is REAL, False if FAKE.
+    Falls back to True on API failure (let deterministic check decide).
+    """
+    template = _load_binary_gate_template()
+    prompt = template.format(
+        parsed_title=parsed_citation.get("title", ""),
+        parsed_authors=parsed_citation.get("authors", ""),
+        parsed_year=parsed_citation.get("year", "unknown"),
+        parsed_venue=parsed_citation.get("venue", ""),
+        parsed_doi=parsed_citation.get("doi", ""),
+    )
+
+    api_key = config.DEEPSEEK_API_KEY
+    if not api_key:
+        return True  # no API → assume real, let deterministic check decide
+
+    payload = json.dumps({
+        "model": DEEPSEEK_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+    }).encode("utf-8")
+
+    try:
+        req = Request(
+            DEEPSEEK_API_URL,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urlopen(req, timeout=DEEPSEEK_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"].strip().upper()
+            return "REAL" in content
+    except (URLError, json.JSONDecodeError, KeyError, OSError):
+        return True  # API fail → assume real, let deterministic check decide

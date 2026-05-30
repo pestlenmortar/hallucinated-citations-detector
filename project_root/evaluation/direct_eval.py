@@ -22,10 +22,11 @@ from backend.parser import parse_citation, ieee_author_overlap
 from backend.normalization import normalize_title
 from backend.feature_engineering import extract_feature_vector, FEATURE_NAMES
 from backend.fusion import fuse_candidates, _token_overlap, _year_similarity
-from backend.verifier import verify_top_candidate, heuristic_verify, llm_verify, llm_verify_direct
+from backend.verifier import verify_top_candidate, heuristic_verify, llm_verify, llm_verify_direct, llm_binary_gate
 from backend.classifier import classify, is_model_available
 from backend.config import DB_PATH, FAISS_INDEX_PATH, USE_LIVE_LOOKUP, USE_LLM
 from backend.thresholding import DEFAULT_THRESHOLDS, apply_thresholds
+from backend.deterministic_check import check_fields
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_PATH = os.path.join(BASE_DIR, "datasets", "test_citations.csv")
@@ -127,7 +128,7 @@ def run_single_citation(raw: str, true_label: str, classifier_available: bool) -
                         ieee_author_overlap(p_authors, db_authors),
                     ) if p_authors and db_authors else 0.0
                     year_ok = p_year is not None and db_year is not None and _year_similarity(db_year, p_year) == 1.0
-                    if auth_overlap < 0.60 or not year_ok:
+                    if auth_overlap < 0.70 or not year_ok:
                         conn.close()
                         return {"predicted_label": "PARTIALLY_VALID", "confidence": 0.70, "source": "db_exact",
                                 "reason": "DOI matches but metadata discrepancy (authors/year)"}
@@ -202,94 +203,89 @@ def run_single_citation(raw: str, true_label: str, classifier_available: bool) -
 
     top = fused[0] if fused else {}
 
-    # ── STEP 6: Classifier or heuristic verifier ──
-    source = "classifier"
-    if classifier_available and top:
+    # ── STEP 6a: LLM Binary Gate — "Does this paper EXIST?" ──
+    paper_is_real = True
+    source = "binary_gate"
+    if USE_LLM:
         try:
-            result = classify(top, parsed, exact_title_match=exact_title_match, exact_doi_match=exact_doi_match)
-            source = result.get("source", "classifier")
+            paper_is_real = llm_binary_gate(parsed)
         except Exception:
-            result = verify_top_candidate(top, parsed, exact_title_match=exact_title_match,
-                                          exact_doi_match=exact_doi_match)
-            source = result.get("source", "heuristic")
+            paper_is_real = True  # API fail → assume real, let field check decide
     else:
-        result = verify_top_candidate(top, parsed, exact_title_match=exact_title_match,
-                                      exact_doi_match=exact_doi_match)
-        source = result.get("source", "heuristic")
+        paper_is_real = True  # no LLM → assume real
 
-    # ── STEP 7: LLM verification (candidate-based) ──
-    llm_used = False
+    if not paper_is_real:
+        return {"predicted_label": "HALLUCINATED", "confidence": 0.85, "source": "binary_gate",
+                "reason": "LLM binary gate: paper does not exist"}
+
+    # ── STEP 6b: Deterministic field check (only for papers in DB) ──
+    if exact_title_match and top:
+        label, conf, reason = check_fields(parsed, top, exact_title_match)
+        if label == "VALID":
+            return {"predicted_label": "VALID", "confidence": conf, "source": "field_check",
+                    "reason": reason}
+        # label is PARTIALLY_VALID — field check found corruptions
+        return {"predicted_label": "PARTIALLY_VALID", "confidence": conf, "source": "field_check",
+                "reason": reason}
+
+    # ── STEP 6c: Paper NOT in DB — LLM verification (no gate, binary gate already said REAL) ──
+    source = "llm_deepseek"
+    llm_result = None
     if USE_LLM and fused:
-        top_c = fused[0]
-        f_sim = top_c.get("fuzzy_score", 0.0) / 100.0
-        s_raw = top_c.get("semantic_score", -1.0)
-        s_sim = 1.0 / (1.0 + s_raw) if s_raw >= 0 else 0.0
-        match_q = (f_sim + s_sim) / 2.0
+        try:
+            llm_result = llm_verify(fused, parsed)
+            if llm_result:
+                source = "llm_deepseek"
+        except Exception:
+            pass
+    elif USE_LLM and not fused:
+        try:
+            llm_result = llm_verify_direct(parsed)
+            if llm_result:
+                source = "llm_deepseek"
+        except Exception:
+            pass
 
-        if match_q >= LLM_MATCH_Q_HIGH:
-            try:
-                llm_result = llm_verify(fused, parsed)
-                if llm_result:
-                    result = llm_result
-                    source = "llm_deepseek"
-                    llm_used = True
-            except Exception:
-                pass
-        elif result.get("label") == "PARTIALLY_VALID" and match_q >= LLM_MATCH_Q_LOW:
-            try:
-                llm_result = llm_verify(fused, parsed)
-                if llm_result and llm_result.get("label") == "VALID" and llm_result.get("confidence", 0.0) >= 0.80:
-                    result = llm_result
-                    source = "llm_deepseek"
-                    llm_used = True
-            except Exception:
-                pass
-
-    # ── STEP 8: Live lookup override ──
-    if USE_LIVE_LOOKUP and not llm_used:
-        result_label = result.get("label", "HALLUCINATED")
-        result_conf = result.get("confidence", 0.0)
-
-        if result_label == "HALLUCINATED" and result_conf >= 0.55:
+    # ── STEP 7: Live lookup override ──
+    if USE_LIVE_LOOKUP:
+        result_label = (llm_result or {}).get("label", "HALLUCINATED")
+        if result_label == "HALLUCINATED":
             if live_lookup_cache:
-                result = live_lookup_cache
-                source = result.get("source", "live_lookup")
+                llm_result = live_lookup_cache
+                source = "live_lookup"
             else:
                 try:
                     from backend.live_lookup import live_lookup_verify
                     live_result = live_lookup_verify(parsed)
                     if live_result:
-                        result = live_result
-                        source = result.get("source", "live_lookup")
+                        llm_result = live_result
+                        source = "live_lookup"
                 except Exception:
                     pass
         elif live_lookup_cache and live_lookup_cache.get("label") == "VALID":
-            ll_score = live_lookup_cache.get("confidence", 0.0)
-            if ll_score >= 0.80:
-                live_lookup_cache["source"] = "live_lookup"
+            if live_lookup_cache.get("confidence", 0.0) >= 0.80:
                 return {
-                    "predicted_label": live_lookup_cache.get("label", "HALLUCINATED"),
-                    "confidence": live_lookup_cache.get("confidence", 0.0),
-                    "source": "live_lookup",
-                    "reason": live_lookup_cache.get("reason", ""),
+                    "predicted_label": "VALID", "confidence": live_lookup_cache.get("confidence", 0.0),
+                    "source": "live_lookup", "reason": live_lookup_cache.get("reason", ""),
                 }
 
-    # ── STEP 9: Direct LLM fallback ──
-    if USE_LLM and result.get("label") == "HALLUCINATED":
+    # ── STEP 8: Direct LLM fallback for remaining HALLUCINATED ──
+    if USE_LLM and (not llm_result or llm_result.get("label") == "HALLUCINATED"):
         try:
-            llm_result = llm_verify_direct(parsed)
-            if llm_result:
-                result = llm_result
+            direct = llm_verify_direct(parsed)
+            if direct:
+                llm_result = direct
                 source = "llm_deepseek"
         except Exception:
             pass
 
-    return {
-        "predicted_label": result.get("label", "HALLUCINATED"),
-        "confidence": result.get("confidence", 0.0),
-        "source": source,
-        "reason": result.get("reason", ""),
-    }
+    if llm_result:
+        return {"predicted_label": llm_result.get("label", "HALLUCINATED"),
+                "confidence": llm_result.get("confidence", 0.0), "source": source,
+                "reason": llm_result.get("reason", "")}
+
+    return {"predicted_label": "HALLUCINATED", "confidence": 0.0, "source": "heuristic",
+            "reason": "No match found"}
 
 
 def main(dry_run: bool = False):

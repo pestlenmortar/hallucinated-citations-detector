@@ -1,0 +1,24 @@
+You are checking whether an academic paper EXISTS in the published literature. Your ONLY job is to decide if this paper (title + author combination) is real or fake.
+
+Do NOT classify corruption level. Do NOT check if details are wrong.
+ONLY answer: does this paper exist as a published work?
+
+Respond with EXACTLY ONE WORD: REAL or FAKE
+
+Rules:
+- REAL = you recognize this title-author combination as a real published paper (even if the citation details like year/venue might be wrong)
+- FAKE = this paper does not exist, the title is fabricated, or the authors never co-authored this work together
+
+Examples:
+- "Attention is All You Need" by Vaswani et al. → REAL (well-known paper)
+- "Quantum-Enhanced Transformers for Text Classification" by random mix of real authors → FAKE (fabricated title)
+- Real paper with slightly wrong year → REAL (paper exists, even if year is wrong)
+
+Citation:
+- Title: {parsed_title}
+- Authors: {parsed_authors}
+- Year: {parsed_year}
+- Venue: {parsed_venue}
+- DOI: {parsed_doi}
+
+Respond with just: REAL or FAKE
