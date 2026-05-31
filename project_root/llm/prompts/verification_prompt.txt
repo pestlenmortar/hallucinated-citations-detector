@@ -6,16 +6,24 @@ INPUTS:
 
 OUTPUT: exactly one of VALID, PARTIALLY_VALID, or HALLUCINATED.
 
+=== DOI RULES (APPLIED FIRST) ===
+- If the citation HAS a DOI and it exactly matches a candidate's DOI → VALID (regardless of other minor discrepancies)
+- If the citation HAS a DOI but NO candidate has a matching DOI → PARTIALLY_VALID (paper exists but DOI is wrong)
+- If a candidate has a DOI but the citation is MISSING it → PARTIALLY_VALID (citation incomplete)
+- Only when BOTH citation and candidate lack a DOI → use metadata rules below
+
 === CLASSIFICATION RULES ===
 
 VALID — paper exists and citation is substantially correct:
 - Title fuzzy score >= 0.85 AND author_similarity >= 0.70 → strongly consider VALID
-- DOI matches exactly → ALWAYS VALID regardless of other discrepancies
-- Year matches (exact) with strong title and author match → VALID
+- DOI matches exactly AND citation has the DOI → ALWAYS VALID regardless of other discrepancies
+- Year matches (exact) with strong title and author match AND DOI is either matching or absent on both sides → VALID
 - Minor venue abbreviation differences do NOT disqualify VALID
 - Missing page numbers, volume, or issue numbers do NOT disqualify VALID
 
 PARTIALLY_VALID — paper exists but citation has errors:
+- Citation has DOI but it does NOT match any candidate → PARTIALLY_VALID
+- Candidate has DOI but citation is missing it → PARTIALLY_VALID
 - Title fuzzy score >= 0.70 AND some author overlap → PARTIALLY_VALID
 - Title matches AND DOI matches but year is off by > 1 → PARTIALLY_VALID
 - Title matches but venue is substantially wrong → PARTIALLY_VALID
@@ -30,15 +38,17 @@ HALLUCINATED — paper likely does not exist:
 - No candidate is meaningfully similar to the input → HALLUCINATED
 
 === DECISION ORDER ===
-1. First check if DOI matches → VALID
-2. Then check if title+author+year strongly match → VALID
-3. Then check if any partial match exists → PARTIALLY_VALID
-4. Default to HALLUCINATED when uncertain
+1. First check DOI: if citation has DOI and it matches a candidate → VALID
+2. If citation has DOI but no candidate matches it → PARTIALLY_VALID
+3. If candidate has DOI but citation is missing it → PARTIALLY_VALID
+4. Then check if title+author+year strongly match → VALID
+5. Then check if any partial match exists → PARTIALLY_VALID
+6. Default to HALLUCINATED when uncertain
 
 === TIE-BREAKING ===
 - When deciding between PARTIALLY_VALID and HALLUCINATED, if title fuzzy_score >= 0.55 → prefer PARTIALLY_VALID
-- When deciding between VALID and PARTIALLY_VALID, if author_similarity >= 0.80 → prefer VALID
-- Missing DOI is NOT evidence of hallucination
+- When deciding between VALID and PARTIALLY_VALID, if author_similarity >= 0.80 AND DOI is consistent → prefer VALID
+- Missing DOI with matching title is PARTIALLY_VALID, NOT hallucination
 
 PARSED CITATION:
 - Title: {parsed_title}

@@ -61,11 +61,11 @@ fuse_candidates = _fusion_ns["fuse_candidates"]
 
 
 # ---------------------------------------------------------------------------
-# Mock rows: (paper_id, title, authors, year, venue)
+# Mock rows: (paper_id, title, authors, year, venue, doi, abstract)
 MOCK_DB_ROWS = [
-    (1, "Machine Learning", "Smith, J.", 2020, "Journal of AI", "10.1234/ml"),
-    (2, "Deep Learning", "Doe, J.", 2021, "Neural Computing", "10.1234/dl"),
-    (3, "Reinforcement Learning", "Lee, K.", 2019, "IEEE Trans", "10.1234/rl"),
+    (1, "Machine Learning", "Smith, J.", 2020, "Journal of AI", "10.1234/ml", "An introduction to ML concepts and algorithms."),
+    (2, "Deep Learning", "Doe, J.", 2021, "Neural Computing", "10.1234/dl", "A survey of deep neural network approaches."),
+    (3, "Reinforcement Learning", "Lee, K.", 2019, "IEEE Trans", "10.1234/rl", "Policy gradient methods for control tasks."),
 ]
 
 
@@ -118,7 +118,7 @@ def test_fuse_candidates_includes_all_fields():
     for key in ("paper_id", "title", "authors", "year", "venue",
                 "fuzzy_score", "semantic_score", "metadata_score",
                 "author_similarity", "year_similarity", "venue_similarity",
-                "final_score"):
+                "doi_similarity", "abstract_similarity", "final_score"):
         assert key in top, f"missing key: {key}"
 
 

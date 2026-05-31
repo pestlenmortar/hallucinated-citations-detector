@@ -43,11 +43,12 @@ PROMPT_PATH = os.path.join(
 
 
 TITLE_W = 0.18
-AUTHOR_W = 0.25
+ABSTRACT_W = 0.18
+AUTHOR_W = 0.15
 YEAR_W = 0.11
-VENUE_W = 0.05
+VENUE_W = 0.02
 DOI_W = 0.10
-SEMANTIC_W = 0.31
+SEMANTIC_W = 0.26
 
 
 def _component_score(candidate: dict) -> float:
@@ -56,11 +57,13 @@ def _component_score(candidate: dict) -> float:
     year_sim = candidate.get("year_similarity", 0.0)
     venue_sim = candidate.get("venue_similarity", 0.0)
     doi_sim = candidate.get("doi_similarity", 0.0)
+    abstract_sim = candidate.get("abstract_similarity", 0.0)
     sem_raw = candidate.get("semantic_score", -1.0)
     sem_sim = 1.0 / (1.0 + sem_raw) if sem_raw >= 0 else 0.0
 
     return round(
         TITLE_W * title_sim
+        + ABSTRACT_W * abstract_sim
         + AUTHOR_W * author_sim
         + YEAR_W * year_sim
         + VENUE_W * venue_sim
@@ -106,6 +109,9 @@ def _detect_metadata_issues(candidate: dict, parsed_citation: dict | None = None
         db_doi = str(candidate.get("doi", "")).strip().lower()
         if p_doi and db_doi and p_doi != db_doi:
             issues.append("DOI mismatch")
+
+    if _metadata_present(candidate, "doi") and not ((parsed_citation or {}).get("doi") or "").strip():
+        issues.append("DOI missing in citation")
 
     return issues
 
@@ -192,6 +198,14 @@ def verify_top_candidate(
         # Author corruption (only if authors present and clearly mismatching)
         if author_sim > 0 and author_sim < 0.20 and metadata_score < 0.25:
             corruptions.append("author_mismatch")
+
+        # DOI mismatch: citation DOI must match database DOI
+        top_doi = (top_candidate.get("doi") or "").strip().lower()
+        p_doi = ((parsed_citation or {}).get("doi") or "").strip().lower()
+        if p_doi and top_doi and p_doi != top_doi:
+            corruptions.append("doi_mismatch")
+        elif not p_doi and top_doi:
+            corruptions.append("missing_doi")
 
         # year_shifted alone is weak — only count if another corruption exists
         # (DB often stores preprint year, citation has pub year → ±1 is normal)

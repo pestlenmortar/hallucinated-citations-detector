@@ -14,11 +14,12 @@ VENUE_STOPWORDS = frozenset({
 })
 
 RANK_TITLE_W = 0.18
-RANK_AUTHOR_W = 0.25
+RANK_ABSTRACT_W = 0.18
+RANK_AUTHOR_W = 0.15
 RANK_YEAR_W = 0.11
-RANK_VENUE_W = 0.05
+RANK_VENUE_W = 0.02
 RANK_DOI_W = 0.10
-RANK_SEMANTIC_W = 0.31
+RANK_SEMANTIC_W = 0.26
 
 
 def _token_overlap(a: str, b: str) -> float:
@@ -79,6 +80,7 @@ def fuse_candidates(
     semantic_results: list,
     parsed_citation: dict,
     db_path: str,
+    parsed_abstract: str = "",
 ) -> list[dict]:
     fuzzy_by_id = {r["paper_id"]: r for r in fuzzy_results if r.get("paper_id")}
     semantic_by_id = {r["paper_id"]: r for r in semantic_results if r.get("paper_id")}
@@ -90,14 +92,14 @@ def fuse_candidates(
     conn = sqlite3.connect(db_path)
     placeholders = ",".join("?" * len(paper_ids))
     rows = conn.execute(
-        f"SELECT paper_id, title, authors, year, venue, doi FROM papers WHERE paper_id IN ({placeholders})",
+        f"SELECT paper_id, title, authors, year, venue, doi, abstract FROM papers WHERE paper_id IN ({placeholders})",
         list(paper_ids),
     ).fetchall()
     conn.close()
 
     db_info = {
         row[0]: {"title": row[1], "authors": row[2], "year": row[3],
-                  "venue": row[4], "doi": row[5]}
+                  "venue": row[4], "doi": row[5], "abstract": row[6] or ""}
         for row in rows
     }
 
@@ -120,6 +122,7 @@ def fuse_candidates(
         db_year = info.get("year")
         db_venue = info.get("venue") or ""
         db_doi = info.get("doi") or ""
+        db_abstract = info.get("abstract") or ""
 
         title_sim = fuzzy_score / 100.0
         sem_sim = 1.0 / (1.0 + semantic_score) if semantic_entry is not None else 0.0
@@ -130,10 +133,12 @@ def fuse_candidates(
         year_sim = _year_similarity(db_year, p_year)
         venue_sim = _venue_similarity(p_venue, db_venue)
         doi_sim = _doi_similarity(db_doi, p_doi)
+        abstract_sim = _token_overlap(parsed_abstract, db_abstract)
 
         metadata_score = (author_sim + year_sim + venue_sim + doi_sim) / 4.0
         final_score = round(
             RANK_TITLE_W * title_sim * 100
+            + RANK_ABSTRACT_W * abstract_sim * 100
             + RANK_AUTHOR_W * author_sim * 100
             + RANK_YEAR_W * year_sim * 100
             + RANK_VENUE_W * venue_sim * 100
@@ -157,6 +162,7 @@ def fuse_candidates(
                 "year_similarity": round(year_sim, 4),
                 "venue_similarity": round(venue_sim, 4),
                 "doi_similarity": round(doi_sim, 4),
+                "abstract_similarity": round(abstract_sim, 4),
                 "final_score": final_score,
             }
         )

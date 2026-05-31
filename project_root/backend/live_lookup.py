@@ -91,11 +91,11 @@ def _doi_similarity(api_doi: str | None, parsed_doi: str) -> float:
 
 
 TITLE_W = 0.18
-AUTHOR_W = 0.25
+AUTHOR_W = 0.15
 YEAR_W = 0.11
-VENUE_W = 0.05
+VENUE_W = 0.02
 DOI_W = 0.10
-SEMANTIC_W = 0.31
+SEMANTIC_W = 0.26
 API_SCORE_CAP_VALID = 0.90
 API_SCORE_CAP_PARTIAL = 0.70
 VALID_THRESHOLD = 0.55

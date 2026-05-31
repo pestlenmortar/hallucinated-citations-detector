@@ -59,6 +59,8 @@ def _exact_lookup(parsed: dict, normed: str, db_path: str) -> list[dict] | None:
             return None
 
         if not p_doi:
+            if db_doi:
+                return None  # citation missing DOI that DB has — let pipeline flag as PARTIALLY_VALID
             if p_authors and db_authors and p_year is not None and db_year is not None:
                 if _year_similarity(db_year, p_year) == 1.0:
                     overlap = max(
@@ -144,11 +146,13 @@ def validate(req: ValidateRequest) -> dict:
 
     live_semantic_query = None
     live_lookup_cache = None
+    live_abstract = ""
     if config.USE_LIVE_LOOKUP:
         live_result = live_lookup_verify(parsed)
         if live_result:
             live_lookup_cache = live_result
             abstract = (live_result.get("live_match") or {}).get("abstract") or ""
+            live_abstract = abstract
             if len(abstract) > len(parsed.get("title") or ""):
                 live_semantic_query = abstract
 
@@ -156,7 +160,7 @@ def validate(req: ValidateRequest) -> dict:
     sem = _try_semantic(semantic_query, config.FAISS_INDEX_PATH)
 
     all_fuzzy = exact + fuzzy
-    fused = fuse_candidates(all_fuzzy, sem, parsed, config.DB_PATH)
+    fused = fuse_candidates(all_fuzzy, sem, parsed, config.DB_PATH, parsed_abstract=live_abstract)
 
     top = fused[0] if fused else {}
     exact_title_match = 1 if exact else 0

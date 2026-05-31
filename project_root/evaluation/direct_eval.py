@@ -135,15 +135,23 @@ def run_single_citation(raw: str, true_label: str, classifier_available: bool) -
                     return {"predicted_label": "VALID", "confidence": 1.0, "source": "db_exact",
                             "reason": "Strict exact match (DOI)"}
 
-                if not p_doi and p_authors and db_authors and p_year is not None and db_year is not None:
-                    overlap = max(
-                        _token_overlap(p_authors, db_authors),
-                        ieee_author_overlap(p_authors, db_authors),
-                    )
-                    if _year_similarity(db_year, p_year) == 1.0 and overlap >= 0.80:
-                        conn.close()
-                        return {"predicted_label": "VALID", "confidence": 1.0, "source": "db_exact",
-                                "reason": "Strict exact match (authors+year)"}
+                if p_doi and db_doi and db_doi.strip().lower() != p_doi:
+                    conn.close()
+                    return {"predicted_label": "PARTIALLY_VALID", "confidence": 0.80, "source": "db_exact",
+                            "reason": "DOI mismatch — citation DOI does not match database"}
+
+                if not p_doi:
+                    if db_doi:
+                        pass  # citation missing DOI that DB has — let verifier flag as PARTIALLY_VALID
+                    elif p_authors and db_authors and p_year is not None and db_year is not None:
+                        overlap = max(
+                            _token_overlap(p_authors, db_authors),
+                            ieee_author_overlap(p_authors, db_authors),
+                        )
+                        if _year_similarity(db_year, p_year) == 1.0 and overlap >= 0.80:
+                            conn.close()
+                            return {"predicted_label": "VALID", "confidence": 1.0, "source": "db_exact",
+                                    "reason": "Strict exact match (authors+year)"}
             conn.close()
         except sqlite3.Error:
             pass
@@ -151,6 +159,7 @@ def run_single_citation(raw: str, true_label: str, classifier_available: bool) -
     # ── STEP 3: Live lookup for semantic enrichment ──
     live_semantic_query = None
     live_lookup_cache = None
+    live_abstract = ""
     if USE_LIVE_LOOKUP:
         try:
             from backend.live_lookup import live_lookup_verify
@@ -158,6 +167,7 @@ def run_single_citation(raw: str, true_label: str, classifier_available: bool) -
             if live_result:
                 live_lookup_cache = live_result
                 abstract = (live_result.get("live_match") or {}).get("abstract") or ""
+                live_abstract = abstract
                 if len(abstract) > len(parsed.get("title") or ""):
                     live_semantic_query = abstract
         except Exception:
@@ -196,7 +206,7 @@ def run_single_citation(raw: str, true_label: str, classifier_available: bool) -
     fused = []
     try:
         all_fuzzy = exact_matches + fuzzy
-        fused = fuse_candidates(all_fuzzy, sem, parsed, DB_PATH)
+        fused = fuse_candidates(all_fuzzy, sem, parsed, DB_PATH, parsed_abstract=live_abstract)
     except Exception:
         pass
 
